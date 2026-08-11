@@ -9,6 +9,8 @@ add entries at the bottom, never rewrite what's above.
 
 ## Purpose
 
+**Repo:** https://github.com/AadiPathak23/cosmos-edge-serve (public)
+
 `cosmos-edge-serve` is an inference service for `nvidia/Cosmos-Reason2-2B`, NVIDIA's 2B-parameter
 reasoning vision-language model for physical AI. It accepts an image or short video plus a text
 prompt over HTTP and returns the model's response.
@@ -177,6 +179,20 @@ security group only opens SSH from one IP.
 - Each phase must be runnable and testable before the next one starts.
 - Prefer boring, well-documented tools over clever ones.
 
+### Git conventions
+
+- **Commits are authored solely by the repo owner.** Never add a `Co-Authored-By:` trailer,
+  a "Generated with ..." line, or any other assistant attribution to a commit message or PR
+  body. This is a portfolio repo and the history is part of it.
+- Repo-local identity is set to `AadiPathak23 <aadipathak2323@gmail.com>`. The *global*
+  `user.name` has a stray leading space (`" AadiPathak23"`), which is why this repo sets it
+  locally. Note the git email differs from the HuggingFace/Claude account email.
+- Prefer several logical commits in the order the work actually happened over one large dump.
+- `.gitattributes` forces `eol=lf`. The repo is developed on Windows but everything runs in
+  Linux containers; autocrlf would otherwise write CRLF into the Docker build context.
+- Generated artifacts are not committed: `assets/*.jpg` and `*.mp4` come from
+  `scripts/make_assets.py`, and model weights never enter the repo or an image.
+
 ## Environment
 
 | Where | Hardware | Precision | Notes |
@@ -266,3 +282,18 @@ Findings that changed the design as it was built:
   note rather than applied silently.
 - Fixed during testing: app state was not cleared on lifespan shutdown, so `/health`
   kept advertising a model whose worker had already stopped.
+
+### 2026-08-11 — Published to GitHub ($0.00 spent)
+
+- Initialised the repo and pushed to https://github.com/AadiPathak23/cosmos-edge-serve as
+  five logical commits (`ab0aaf8` docs → `f13f8fb` scaffold → `10689c0` app → `1e098eb`
+  Docker → `43c2674` tests), following the order the work actually happened.
+- All commits authored **and** committed by `AadiPathak23 <aadipathak2323@gmail.com>`, with
+  no assistant attribution anywhere. Recorded as a standing convention in STABLE above.
+- Added `.gitattributes` (`* text=auto eol=lf`) — git was about to convert the working copy
+  to CRLF, which would have put CRLF into the Linux Docker build context.
+- Pre-publish checks: no `.env` present or tracked, no token/key-shaped strings anywhere in
+  the tree, `models/` and generated `assets/*.jpg|mp4` correctly ignored. 31 files pushed.
+
+**Nothing has run against real weights yet.** The service is code-complete and unit-tested
+but unproven end to end — see the "start here" block at the top of `docs/PLAN.md`.

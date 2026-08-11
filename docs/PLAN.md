@@ -1,7 +1,58 @@
 # PLAN
 
-**Status:** Phase 1 code complete and unit-tested. **Not yet run against real weights.**
+**Status:** Phase 1 code complete, unit-tested, and pushed to GitHub.
+**Not yet run against real weights — that is the next thing to do.**
 **Budget spent to date: $0.00 / $10.00**
+
+---
+
+## ▶ START HERE (next session)
+
+Everything below this block is context. These are the actual next actions, in order.
+
+**1. Accept the model licence and get a token** *(one-off, ~2 min, free)*
+The `nvidia/Cosmos-Reason2-2B` repo is **gated**. Without this, the first run dies on a
+bare HTTP 401 that looks like a network fault.
+- Sign in and accept the licence at https://huggingface.co/nvidia/Cosmos-Reason2-2B
+  (granted automatically, no approval queue)
+- Create a **read** token at https://huggingface.co/settings/tokens
+- `cp .env.example .env` and set `HF_TOKEN=hf_...`
+
+**2. First real run** *(free, local)*
+```bash
+docker compose up --build        # first start pulls ~5 GB into the cosmos-models volume
+```
+Then read the startup banner and check four things:
+- `model class` is `Qwen3VLForConditionalGeneration`
+- `total params` is 2,438,696,960 (proves the 4-bit unpacking guard works)
+- `device` is `cuda:0`, **not** cpu
+- `weights on device` is ~2 GB — this answers open question 3 (does NF4 quantize the ViT
+  tower, or only the language model?)
+
+Record the banner output and the measured image size (`docker images cosmos-edge-serve`)
+in the `docs/CLAUDE.md` CHANGELOG. Predicted image size is 6–8 GB.
+
+**3. Smoke test** *(free, local)*
+```bash
+docker compose exec cosmos python scripts/make_assets.py
+python scripts/smoke_test.py
+```
+Image *and* video must both return text with non-zero visual token counts. The video leg
+is what proves torchcodec found its FFmpeg libraries (open question 4).
+
+**4. File the AWS quota increase** *(free, but takes 1–3 days — do it today)*
+Service Quotas → EC2 → "All G and VT Spot Instance Requests" → request ≥4 vCPUs.
+New accounts sit at 0. This is the only thing that can block Phase 2 for reasons
+unrelated to the code, so it needs to be in flight well before Phase 2 starts.
+
+**5. Kaggle T4 check** *(free)*
+Run with `COSMOS_QUANT=none` on a Kaggle T4 to prove the fp16 path, and measure the real
+decode rate in tok/s. Benchmark profile B's runtime budget depends on that number
+(open question 5) — measure it free before paying for EC2.
+
+**Do not start Phase 2 without an explicit go.** It costs money.
+
+---
 
 Legend: `[x]` done and verified · `[~]` written but not yet exercised against real
 weights/hardware · `[ ]` not started.
@@ -118,6 +169,8 @@ Do not start a phase until the previous one is confirmed working.
       GPU and no weights: `load_model` and `run_inference` are faked at the seam, so the
       queue, executor, metrics, and error mapping are all genuinely exercised.
 - [x] `ruff check .` clean
+- [x] Repo initialised and pushed to https://github.com/AadiPathak23/cosmos-edge-serve
+      (5 commits, no assistant attribution, `.gitattributes` forcing LF, no secrets)
 - [ ] `docker compose up --build` on the RTX 3060 with NF4 → healthy, banner correct
 - [ ] `python scripts/make_assets.py && python scripts/smoke_test.py` → image + video
       both return sane text and non-zero visual token counts

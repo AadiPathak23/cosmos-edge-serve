@@ -9,8 +9,9 @@
 > **~$0.32/hour**; on-demand is **$0.526/hour**. A forgotten instance costs about **$380/month**.
 > An unattached Elastic IP bills hourly even with nothing running.
 >
-> If you have run Phase 2, **[`docs/TEARDOWN.md`](docs/TEARDOWN.md) is not optional.** Run it
-> the same day and verify in the AWS console — not from memory.
+> If you have run Phase 2, **`docs/TEARDOWN.md` is not optional** — run it the same day and
+> verify in the AWS console, not from memory. (That file is written in Phase 2; nothing has
+> been deployed yet, so it does not exist and there is nothing to tear down.)
 >
 > This project has a hard **$10 total budget**. Estimated real cost of a full Phase 2
 > benchmark run: **~$1.05**.
@@ -28,11 +29,14 @@ on a T4 GPU.** Everything else here exists to produce that number honestly.
 
 | Phase | What | State |
 |---|---|---|
-| 1 | Local FastAPI + Docker service | **in progress** |
+| 1 | Local FastAPI + Docker service | **code complete, 32 tests passing — not yet run against real weights** |
 | 2 | EC2 T4 deployment + k6 benchmark | not started (costs money) |
 | 3 | Kubernetes (local k3s) | optional, not started |
 
-Benchmark results will appear here once Phase 2 runs.
+Benchmark results will appear here once Phase 2 runs. Until then, treat every performance
+claim in this README as a prediction rather than a measurement.
+
+See [`docs/PLAN.md`](docs/PLAN.md) for the current task breakdown and what to do next.
 
 ---
 
@@ -217,9 +221,9 @@ validation, the 503-before-warm contract, queue overflow, `<think>` parsing, and
 
 ## Related
 
-- [`featherweight-ai`](https://github.com/) — benchmarks PEFT methods (LoRA/QLoRA/DoRA) on
-  this same model and produces the adapter this service can load. The two repos share no
-  code; they are linked only by that artifact.
+- `featherweight-ai` — benchmarks PEFT methods (LoRA/QLoRA/DoRA) on this same model and
+  produces the adapter this service can load. The two repos share no code; they are linked
+  only by that artifact.
 
 ## License
 
