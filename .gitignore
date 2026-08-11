@@ -1,0 +1,33 @@
+# Secrets — never commit
+.env
+*.pem
+.aws/
+
+# Model weights and HF cache — these live on a Docker volume, never in git
+models/
+*.safetensors
+*.bin
+*.gguf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Generated sample media (recreate with scripts/make_assets.py)
+assets/*.jpg
+assets/*.mp4
+
+# Load test output
+loadtest/results/
+*.json.gz
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,26 @@
+[project]
+name = "cosmos-edge-serve"
+version = "0.1.0"
+description = "Inference service for nvidia/Cosmos-Reason2-2B"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "S"]
+ignore = [
+    "S101", # asserts are fine in tests
+    "B008", # FastAPI's Depends()/File()/Form() defaults are the documented idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "E501"]
+"scripts/*" = ["S310"] # urllib with a localhost URL we construct ourselves

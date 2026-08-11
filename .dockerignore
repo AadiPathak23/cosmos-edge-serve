@@ -1,0 +1,28 @@
+# Keep the build context small — everything here would otherwise be uploaded to
+# the daemon on every build, and some of it must never reach an image.
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Secrets
+.env
+*.pem
+
+# Weights belong on a volume, never in the image
+models/
+*.safetensors
+*.bin
+
+# Not needed at runtime
+docs/
+tests/
+loadtest/
+assets/
+README.md
+CLAUDE.md
+requirements-dev.txt
