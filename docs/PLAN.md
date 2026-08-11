@@ -1,0 +1,214 @@
+# PLAN
+
+**Status:** Phase 1 code complete and unit-tested. **Not yet run against real weights.**
+**Budget spent to date: $0.00 / $10.00**
+
+Legend: `[x]` done and verified · `[~]` written but not yet exercised against real
+weights/hardware · `[ ]` not started.
+
+Do not start a phase until the previous one is confirmed working.
+
+---
+
+## Phase 0 — Research & docs (free) ✅
+
+- [x] Research how Cosmos-Reason2-2B is actually loaded and served
+- [x] Determine the right backend: **transformers, not vLLM** (vLLM #29743 — no Turing
+      support for Qwen3-VL, closed as not planned)
+- [x] Determine video input format: mp4, `fps=4`, media listed before text
+- [x] Determine VRAM footprint: ~4.9 GB weights at fp16; no FP8 on Turing
+- [x] Write `docs/PLAN.md`, `docs/CLAUDE.md`, root `CLAUDE.md` stub
+
+---
+
+## Phase 1 — Local service (FREE — local only, no cloud calls)
+
+### 1.1 Scaffold ✅
+
+- [x] `.gitignore`, `.dockerignore`
+- [x] `requirements.txt` — every dep pinned, **and the full set verified to co-install**
+      in a clean venv. Two traps found and avoided:
+      - `huggingface-hub` must be `<1.0` (it is on 1.x now); `transformers==4.57.3`
+        declares `huggingface-hub<1.0,>=0.34.0`, so an unpinned install silently
+        resolves transformers *backwards* to a version with no Qwen3-VL.
+      - `torchvision==0.24.0` is the version that hard-requires `torch==2.9.0`. The
+        current latest, 0.28.0, would have dragged in torch 2.13.
+      - `tokenizers` ceiling is really 0.22.2 — transformers caps at `<=0.23.0` and
+        0.23.0 was never published.
+- [x] `requirements-dev.txt`, `pyproject.toml` (pytest + ruff config)
+- [x] `.env.example` with every `COSMOS_*` variable documented inline
+- [x] `README.md` with the cost warning at the very top
+- [x] `scripts/make_assets.py` — generates `assets/sample.jpg` and `sample.mp4`
+      (3 s, 12 frames @ 4 fps, with burnt-in timestamps). Verified: decodes back to
+      12 frames at rate 4. Real media is not committed.
+
+### 1.2 Model loading — `app/config.py`, `app/model.py` ✅ / ~
+
+- [x] `COSMOS_*` settings via pydantic-settings (`protected_namespaces=()` so `model_id`
+      does not collide with pydantic's reserved `model_` prefix)
+- [~] Loader: `Qwen3VLForConditionalGeneration` + `AutoProcessor`
+- [x] Precision switch NF4 / fp16 via `BitsAndBytesConfig`
+- [x] Device switch `auto`/`cuda`/`cpu`; CPU forces float32 with an explicit banner note
+      (fp16 matmul kernels do not exist on CPU)
+- [x] Vision token clamp on `image_processor` and `video_processor`
+- [~] Optional PEFT adapter, off by default
+- [x] Loud startup banner with the full load report
+- [x] **Anti-mock guards, all fatal:**
+  - [x] model class must be `Qwen3VLForConditionalGeneration` (unwraps PEFT first)
+  - [x] param count must exceed 2 B — **with 4-bit unpacking**, because bitsandbytes
+        packs 2 params per byte and a raw `numel()` would report ~1.2 B on a perfectly
+        healthy NF4 load and abort startup
+  - [x] parameters must be on the requested device (no silent CPU fallback)
+  - [x] parameters must not be split across devices (catches accelerate offload, which
+        would silently make every benchmark number meaningless)
+  - [x] `device_map={"": 0}` rather than `"auto"`, so insufficient VRAM is an OOM at
+        startup instead of a quiet 20x slowdown
+- [x] Gated-repo detection: a bare HTTP 401 is rewritten into the licence + token steps
+- [~] Warmup: synthetic 448×448 image + 8-token generate before healthy
+
+### 1.3 Inference path — `app/inference.py`, `app/schemas.py` ✅ / ~
+
+- [x] Conversation built **media before text**; `fps` passed only for video
+- [~] `processor.apply_chat_template(...)`
+- [x] Token accounting — visual tokens read from `config.image_token_id` /
+      `video_token_id` first (authoritative), with a `<|image_pad|>`/`<|video_pad|>`
+      tokenizer lookup as fallback
+- [x] `<think>` split, including the unterminated case (truncated mid-reasoning →
+      reasoning returned, answer empty, `truncated: true`)
+- [x] `torch.cuda.synchronize()` after generate — without it the timing measures kernel
+      *launch*, not execution, and every latency number comes out far too low
+- [x] Greedy decoding (`do_sample=False`) so benchmark runs are comparable
+- [x] 415 / 413 / 422 for bad media type, oversize upload, empty prompt
+
+### 1.4 Concurrency — `app/queue.py` ✅
+
+- [x] Bounded `asyncio.Queue`, single worker, 1-thread executor
+- [x] Queue full → 503 + `Retry-After`; timeout → 504
+- [x] Queue wait and compute recorded separately
+- [x] Worker survives a failed request; failures propagate to the caller, not into a
+      hung future
+
+### 1.5 API — `app/main.py` ✅
+
+- [x] `POST /infer`, `GET /health`, `GET /metrics`, `GET /` , `/docs`
+- [x] Model loads once in the lifespan handler; load failure → non-zero exit
+- [x] App state cleared on shutdown so `/health` stops advertising a dead worker
+
+### 1.6 Observability ✅
+
+- [x] structlog JSON, one line per request with the full token and timing breakdown
+- [x] Prometheus metrics with buckets that span 0.1 s → 300 s (the default buckets top
+      out at 10 s and would lump nearly every real request into `+Inf`)
+
+### 1.7 Docker ~
+
+- [~] Multi-stage Dockerfile. Builder and runtime share the same CUDA base on purpose:
+      a venv records an absolute interpreter path, so building against `python:3.12-slim`
+      and copying across would leave the venv pointing at a binary that does not exist.
+- [~] `nvidia/cuda:12.8.1-runtime-ubuntu24.04` (tag existence verified), ffmpeg for
+      torchcodec, curl for the healthcheck, non-root user
+- [x] `HF_HOME=/models` + named volume — **weights never baked into the image**
+- [x] `HF_TOKEN` threaded through compose (required: the repo is gated)
+- [ ] Build it and **record the measured image size** in the CHANGELOG
+- [ ] Verify GPU passthrough end to end on the laptop
+
+### 1.8 Verify Phase 1
+
+- [x] `pytest` — **32 passed, 1 skipped** (the skip needs a bf16-less GPU). Runs with no
+      GPU and no weights: `load_model` and `run_inference` are faked at the seam, so the
+      queue, executor, metrics, and error mapping are all genuinely exercised.
+- [x] `ruff check .` clean
+- [ ] `docker compose up --build` on the RTX 3060 with NF4 → healthy, banner correct
+- [ ] `python scripts/make_assets.py && python scripts/smoke_test.py` → image + video
+      both return sane text and non-zero visual token counts
+- [ ] Same image on a **Kaggle T4** with `COSMOS_QUANT=none` → fp16 path works
+- [ ] Measure real T4 decode rate on Kaggle (free) to size benchmark profile B
+- [ ] ⚠️ **File the AWS G-family vCPU quota increase** — free, but takes 1–3 days.
+      Service Quotas → EC2 → "All G and VT Spot Instance Requests" → request ≥4 vCPUs.
+      New accounts sit at 0 and Phase 2 cannot launch without it.
+
+---
+
+## Phase 2 — Cloud (💵 COSTS MONEY — do not start without explicit confirmation)
+
+### Cost estimate — read before doing anything in this phase
+
+| Item | Rate | Est. usage | Est. cost |
+|---|---|---|---|
+| `g4dn.xlarge` **spot** (T4, 16 GB) | $0.32/hr | 3 hr | $0.96 |
+| EBS gp3 root, 100 GB | $0.08/GB-month | 3 hr | $0.03 |
+| S3 storage, ~6 GB | $0.023/GB-month | 7 days | $0.03 |
+| S3 requests | negligible | — | <$0.01 |
+| EC2 → S3 transfer, same region | free | — | $0.00 |
+| **Total** | | | **~$1.05** |
+
+On-demand comparison: $0.526/hr → ~$1.58 for the same 3 hours. Spot is the default;
+the benchmark is short and rerunnable, so interruption risk is acceptable.
+
+**Free alternative to state up front:** weights can be pulled straight from HuggingFace
+on the instance for $0. S3 is in the plan because it is an explicit learning goal, and
+because the featherweight-ai adapter has no other home. A real secondary benefit found
+during Phase 1: mirroring to S3 means `HF_TOKEN` never has to live on the EC2 box.
+
+Worst case with one failed run and a redo: **~$3**. Ceiling is $10.
+
+### Tasks
+
+- [ ] 🛑 **STOP — confirm the cost table above before any AWS action**
+- [ ] Verify the G-family vCPU quota increase landed
+- [ ] S3: create bucket, upload base weights + adapter
+      *(undo: `aws s3 rb s3://<bucket> --force`)*
+- [ ] EC2: launch `g4dn.xlarge` **spot**, Deep Learning Base OSS Nvidia Driver AMI
+      (Ubuntu 22.04) — driver/docker/container-toolkit preinstalled, minimising **paid**
+      GPU minutes spent on setup
+      *(undo: `aws ec2 terminate-instances --instance-ids <id>`)*
+- [ ] Security group: SSH from your IP only. **Port 8000 stays closed** — k6 runs on-box.
+      *(undo: `aws ec2 delete-security-group --group-id <id>`)*
+- [ ] Pull weights from S3 into the volume, then `docker compose up`
+- [ ] Confirm the banner reads `dtype float16`, `quantization none`, Tesla T4 detected
+- [ ] `loadtest/load.js` — k6, profile A (256 tok) and B (1024 tok), 1 / 4 / 8 VUs
+- [ ] Run both sweeps on the instance against `localhost:8000`
+- [ ] `loadtest/render_results.py` → markdown tables committed to README + docs
+- [ ] Write `docs/TEARDOWN.md` (terminate, verify EBS deleted, release EIP, empty and
+      delete the bucket, delete snapshots/AMIs, confirm $0 in Cost Explorer 24 h later)
+- [ ] ✅ **Run teardown the same day. Verify in the console, not from memory.**
+
+---
+
+## Phase 3 — Kubernetes (OPTIONAL — only if explicitly requested)
+
+- [ ] Local k3s or minikube only. Zero cloud spend.
+- [ ] Deployment, Service, HPA manifests
+- [ ] README must state plainly: single-node learning exercise, not production.
+
+---
+
+## Open questions
+
+**Resolved during Phase 1**
+
+1. ~~Visual placeholder token strings~~ → sidestepped. Visual tokens are counted from
+   `config.image_token_id` / `video_token_id`, which is authoritative and survives
+   tokenizer renames; the `<|image_pad|>` lookup is only a fallback. Still worth
+   eyeballing the first real smoke test to confirm the count is non-zero — the smoke
+   test asserts exactly that.
+2. **New, and it would have blocked the first run:** the `nvidia/Cosmos-Reason2-*`
+   repos are **gated** (`gated: auto`). `HF_TOKEN` is required, not optional. Access is
+   granted automatically once the licence is accepted, so there is no approval wait.
+
+**Still open**
+
+3. Does bitsandbytes NF4 quantize the ViT tower, or only the language model? Determines
+   whether the ~2 GB estimate holds on the 6 GB laptop and whether image understanding
+   degrades. → Read `weights on device` off the banner at first real load.
+4. torchcodec 0.9.1 links against FFmpeg shared libs at import. Ubuntu 24.04 ships
+   FFmpeg 6.x, which torchcodec 0.9 supports, and the Dockerfile installs `ffmpeg` —
+   but this is unproven until the image actually builds and a video request succeeds.
+5. Real T4 decode rate is unmeasured. Estimate 20–35 tok/s (2.4 B fp16 ≈ 4.9 GB against
+   320 GB/s → ~65 tok/s memory-bound ceiling; HF `generate` will not approach it).
+   Benchmark profile B's runtime budget depends on this. → Measure free on Kaggle.
+6. Do NF4-on-3060 and fp16-on-T4 agree closely enough for the smoke test to assert on
+   output *content*, or only on shape? Currently it asserts on shape plus non-zero
+   visual tokens.
+7. Measured Docker image size. Predicted 6–8 GB (torch+cu128 bundles ~4 GB of nvidia
+   wheels). Record the real number once built.
