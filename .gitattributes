@@ -1,0 +1,11 @@
+# This repo is developed on Windows but everything runs inside Linux containers.
+# Without this, autocrlf writes CRLF into the build context and anything that ends
+# up being executed as a script breaks with a confusing "\r: not found".
+* text=auto eol=lf
+
+# Binary — never touch these.
+*.jpg binary
+*.png binary
+*.webp binary
+*.mp4 binary
+*.safetensors binary

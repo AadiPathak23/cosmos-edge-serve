@@ -1,0 +1,54 @@
+# docker compose up --build
+#
+# Defaults target the 6 GB RTX 3060 Laptop (NF4). For a T4, set COSMOS_QUANT=none
+# and COSMOS_MAX_VISION_TOKENS=4096 in your .env.
+
+services:
+  cosmos:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cosmos-edge-serve:0.1.0
+    ports:
+      - "8000:8000"
+
+    # Values here are fallbacks used when the variable is absent from .env, so a
+    # fresh clone with no .env still starts sensibly on a laptop.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HF_HOME: /models
+      # Required: the Cosmos-Reason2 repos are gated. Set HF_TOKEN in .env.
+      HF_TOKEN: ${HF_TOKEN:-}
+      COSMOS_QUANT: ${COSMOS_QUANT:-nf4}
+      COSMOS_DEVICE: ${COSMOS_DEVICE:-auto}
+      COSMOS_LOG_LEVEL: ${COSMOS_LOG_LEVEL:-INFO}
+
+    volumes:
+      # THE important line: weights are downloaded into this named volume on first
+      # start and reused forever after. They are never part of the image, so a
+      # rebuild does not re-download 5 GB.
+      - cosmos-models:/models
+
+    # GPU passthrough. On Windows this requires Docker Desktop's WSL2 backend plus
+    # the NVIDIA Container Toolkit inside WSL2. Verify with:
+    #   docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
+    # To run CPU-only instead, comment out this whole `deploy:` block and set
+    # COSMOS_DEVICE=cpu and COSMOS_QUANT=none in .env.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    # Model loading pins a CPU core for a while; without this the container can be
+    # OOM-killed on a laptop mid-download.
+    shm_size: "1gb"
+    restart: unless-stopped
+
+volumes:
+  cosmos-models:
+    name: cosmos-models
