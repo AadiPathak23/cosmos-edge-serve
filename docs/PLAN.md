@@ -1,54 +1,41 @@
 # PLAN
 
-**Status:** Phase 1 code complete, unit-tested, and pushed to GitHub.
-**Not yet run against real weights — that is the next thing to do.**
+**Status: Phase 1 is COMPLETE and verified end to end on the RTX 3060.**
+The service loads real weights, and the smoke test passes on **both image and video**.
 **Budget spent to date: $0.00 / $10.00**
 
 ---
 
 ## ▶ START HERE (next session)
 
-Everything below this block is context. These are the actual next actions, in order.
+Phase 1 is done. Everything below this block is context. These are the next actions, in order.
 
-**1. Accept the model licence and get a token** *(one-off, ~2 min, free)*
-The `nvidia/Cosmos-Reason2-2B` repo is **gated**. Without this, the first run dies on a
-bare HTTP 401 that looks like a network fault.
-- Sign in and accept the licence at https://huggingface.co/nvidia/Cosmos-Reason2-2B
-  (granted automatically, no approval queue)
-- Create a **read** token at https://huggingface.co/settings/tokens
-- `cp .env.example .env` and set `HF_TOKEN=hf_...`
-
-**2. First real run** *(free, local)*
-```bash
-docker compose up --build        # first start pulls ~5 GB into the cosmos-models volume
-```
-Then read the startup banner and check four things:
-- `model class` is `Qwen3VLForConditionalGeneration`
-- `total params` is 2,438,696,960 (proves the 4-bit unpacking guard works)
-- `device` is `cuda:0`, **not** cpu
-- `weights on device` is ~2 GB — this answers open question 3 (does NF4 quantize the ViT
-  tower, or only the language model?)
-
-Record the banner output and the measured image size (`docker images cosmos-edge-serve`)
-in the `docs/CLAUDE.md` CHANGELOG. Predicted image size is 6–8 GB.
-
-**3. Smoke test** *(free, local)*
-```bash
-docker compose exec cosmos python scripts/make_assets.py
-python scripts/smoke_test.py
-```
-Image *and* video must both return text with non-zero visual token counts. The video leg
-is what proves torchcodec found its FFmpeg libraries (open question 4).
-
-**4. File the AWS quota increase** *(free, but takes 1–3 days — do it today)*
+**1. File the AWS quota increase** *(free, but takes 1–3 days — do it first)*
 Service Quotas → EC2 → "All G and VT Spot Instance Requests" → request ≥4 vCPUs.
 New accounts sit at 0. This is the only thing that can block Phase 2 for reasons
-unrelated to the code, so it needs to be in flight well before Phase 2 starts.
+unrelated to the code, so get it in flight before anything else.
 
-**5. Kaggle T4 check** *(free)*
+**2. Kaggle T4 check** *(free)*
 Run with `COSMOS_QUANT=none` on a Kaggle T4 to prove the fp16 path, and measure the real
 decode rate in tok/s. Benchmark profile B's runtime budget depends on that number
-(open question 5) — measure it free before paying for EC2.
+(open question 5) — measure it free before paying for EC2. On the laptop under NF4 we
+saw only **0.6–2.9 tok/s**, which is not a T4 number and must not be used to size anything.
+Also raise `COSMOS_MAX_VISION_TOKENS` to 4096 there: NF4 used just 1.59 GB of 6 GB, so a
+16 GB T4 at fp16 has plenty of room.
+
+**3. Consider shrinking the image before Phase 2** *(free, local)*
+It measures **18.1 GB**, not the predicted 6–8 GB, because CUDA ships twice — the
+`nvidia/cuda:12.8.1-runtime` base installs system CUDA libraries *and* torch's `+cu128`
+wheels bundle their own. Try `nvidia/cuda:12.8.1-base-ubuntu24.04` (411 MB vs 3.11 GB of
+libraries) and re-run the smoke test. Worth doing before Phase 2: an 18 GB image is real
+paid GPU minutes to build or pull on the instance.
+
+**To reproduce the working local run:**
+```bash
+cp .env.example .env     # set HF_TOKEN — the repo is GATED
+docker compose up --build
+python scripts/smoke_test.py    # host-side, stdlib only; assets already exist
+```
 
 **Do not start Phase 2 without an explicit go.** It costs money.
 
@@ -97,12 +84,12 @@ Do not start a phase until the previous one is confirmed working.
 
 - [x] `COSMOS_*` settings via pydantic-settings (`protected_namespaces=()` so `model_id`
       does not collide with pydantic's reserved `model_` prefix)
-- [~] Loader: `Qwen3VLForConditionalGeneration` + `AutoProcessor`
+- [x] Loader: `Qwen3VLForConditionalGeneration` + `AutoProcessor`
 - [x] Precision switch NF4 / fp16 via `BitsAndBytesConfig`
 - [x] Device switch `auto`/`cuda`/`cpu`; CPU forces float32 with an explicit banner note
       (fp16 matmul kernels do not exist on CPU)
 - [x] Vision token clamp on `image_processor` and `video_processor`
-- [~] Optional PEFT adapter, off by default
+- [x] Optional PEFT adapter, off by default (unwrap path fixed and regression-tested)
 - [x] Loud startup banner with the full load report
 - [x] **Anti-mock guards, all fatal:**
   - [x] model class must be `Qwen3VLForConditionalGeneration` (unwraps PEFT first)
@@ -115,12 +102,12 @@ Do not start a phase until the previous one is confirmed working.
   - [x] `device_map={"": 0}` rather than `"auto"`, so insufficient VRAM is an OOM at
         startup instead of a quiet 20x slowdown
 - [x] Gated-repo detection: a bare HTTP 401 is rewritten into the licence + token steps
-- [~] Warmup: synthetic 448×448 image + 8-token generate before healthy
+- [x] Warmup: synthetic 448×448 image + 8-token generate before healthy (18.5 s measured)
 
 ### 1.3 Inference path — `app/inference.py`, `app/schemas.py` ✅ / ~
 
 - [x] Conversation built **media before text**; `fps` passed only for video
-- [~] `processor.apply_chat_template(...)`
+- [x] `processor.apply_chat_template(...)`
 - [x] Token accounting — visual tokens read from `config.image_token_id` /
       `video_token_id` first (authoritative), with a `<|image_pad|>`/`<|video_pad|>`
       tokenizer lookup as fallback
@@ -153,28 +140,31 @@ Do not start a phase until the previous one is confirmed working.
 
 ### 1.7 Docker ~
 
-- [~] Multi-stage Dockerfile. Builder and runtime share the same CUDA base on purpose:
+- [x] Multi-stage Dockerfile. Builder and runtime share the same CUDA base on purpose:
       a venv records an absolute interpreter path, so building against `python:3.12-slim`
       and copying across would leave the venv pointing at a binary that does not exist.
-- [~] `nvidia/cuda:12.8.1-runtime-ubuntu24.04` (tag existence verified), ffmpeg for
-      torchcodec, curl for the healthcheck, non-root user
+- [x] `nvidia/cuda:12.8.1-runtime-ubuntu24.04`, ffmpeg **plus `libpython3.12t64`** for
+      torchcodec, curl for the healthcheck, non-root user (UID 1000 needs `userdel ubuntu`
+      first on 24.04), and torch/lib appended to `LD_LIBRARY_PATH`
 - [x] `HF_HOME=/models` + named volume — **weights never baked into the image**
 - [x] `HF_TOKEN` threaded through compose (required: the repo is gated)
-- [ ] Build it and **record the measured image size** in the CHANGELOG
-- [ ] Verify GPU passthrough end to end on the laptop
+- [x] Build it and **record the measured image size** in the CHANGELOG — **18.1 GB**, vs 6–8 GB predicted
+- [x] Verify GPU passthrough end to end on the laptop
 
 ### 1.8 Verify Phase 1
 
-- [x] `pytest` — **32 passed, 1 skipped** (the skip needs a bf16-less GPU). Runs with no
+- [x] `pytest` — **35 passed, 1 skipped** (the skip needs a bf16-less GPU). Runs with no
       GPU and no weights: `load_model` and `run_inference` are faked at the seam, so the
       queue, executor, metrics, and error mapping are all genuinely exercised.
 - [x] `ruff check .` clean
 - [x] Repo initialised and pushed to https://github.com/AadiPathak23/cosmos-edge-serve
       (5 commits, no assistant attribution, `.gitattributes` forcing LF, no secrets)
-- [ ] `docker compose up --build` on the RTX 3060 with NF4 → healthy, banner correct
-- [ ] `python scripts/make_assets.py && python scripts/smoke_test.py` → image + video
-      both return sane text and non-zero visual token counts
-- [ ] Same image on a **Kaggle T4** with `COSMOS_QUANT=none` → fp16 path works
+- [x] `docker compose up --build` on the RTX 3060 with NF4 → healthy, banner correct
+- [x] `python scripts/smoke_test.py` → image + video both return sane text and non-zero
+      visual token counts (visual=300 image, visual=480 video). Assets already exist on the
+      host; do **not** run `make_assets.py` inside the container — compose mounts only
+      `cosmos-models:/models`, so files written there are invisible to the host-side test.
+- [ ] Same image on a **Kaggle T4** with `COSMOS_QUANT=none` → fp16 path works ← NEXT
 - [ ] Measure real T4 decode rate on Kaggle (free) to size benchmark profile B
 - [ ] ⚠️ **File the AWS G-family vCPU quota increase** — free, but takes 1–3 days.
       Service Quotas → EC2 → "All G and VT Spot Instance Requests" → request ≥4 vCPUs.
@@ -241,27 +231,34 @@ Worst case with one failed run and a redo: **~$3**. Ceiling is $10.
 **Resolved during Phase 1**
 
 1. ~~Visual placeholder token strings~~ → sidestepped. Visual tokens are counted from
-   `config.image_token_id` / `video_token_id`, which is authoritative and survives
-   tokenizer renames; the `<|image_pad|>` lookup is only a fallback. Still worth
-   eyeballing the first real smoke test to confirm the count is non-zero — the smoke
-   test asserts exactly that.
-2. **New, and it would have blocked the first run:** the `nvidia/Cosmos-Reason2-*`
-   repos are **gated** (`gated: auto`). `HF_TOKEN` is required, not optional. Access is
-   granted automatically once the licence is accepted, so there is no approval wait.
+   `config.image_token_id` / `video_token_id`. Confirmed non-zero on the first real run:
+   visual=300 (image), visual=480 (video).
+2. ~~`nvidia/Cosmos-Reason2-*` repos are gated~~ → confirmed against a real 401. `HF_TOKEN`
+   is required. The loader rewrites the bare 401 into the licence + token steps; verified.
+3. ~~Does NF4 quantize the ViT tower, or only the language model?~~ → **BOTH.** Weights land
+   at 1.54 GB, under the ~2 GB estimate, using 1.59 GB of 6 GB VRAM. Only the tied token
+   embedding and ~4 M of norms/biases stay in fp16. Image *and* video understanding are fine.
+4. ~~torchcodec 0.9.1 / FFmpeg linkage~~ → **FFmpeg was never the problem**, despite the
+   error text saying so. Two stacked causes: `libtorch.so` not on `LD_LIBRARY_PATH` (pip puts
+   it in `site-packages/torch/lib`), then `libpython3.12.so.1.0` missing because Ubuntu's
+   `python3` ships no shared libpython (package is `libpython3.12t64` on 24.04). Both fixed
+   in the Dockerfile; video decode verified end to end.
+7. ~~Measured Docker image size~~ → **18.1 GB**, vs 6–8 GB predicted. CUDA ships twice: the
+   `-runtime` base's system CUDA libraries (3.11 GB) plus torch's bundled `+cu128` wheels.
+   Switching to the `-base` tag is a candidate fix, not yet attempted.
+
+**New, found during the first real run**
+
+8. **The model card's param count cannot be asserted for equality.** A live model reports
+   2,127,532,032, not 2,438,696,960 — `lm_head` is tied to `embed_tokens` and
+   `model.parameters()` deduplicates. Guard with a floor only. Recheck this on the T4 at
+   fp16: the tying is architectural, so it should report the same figure.
 
 **Still open**
 
-3. Does bitsandbytes NF4 quantize the ViT tower, or only the language model? Determines
-   whether the ~2 GB estimate holds on the 6 GB laptop and whether image understanding
-   degrades. → Read `weights on device` off the banner at first real load.
-4. torchcodec 0.9.1 links against FFmpeg shared libs at import. Ubuntu 24.04 ships
-   FFmpeg 6.x, which torchcodec 0.9 supports, and the Dockerfile installs `ffmpeg` —
-   but this is unproven until the image actually builds and a video request succeeds.
-5. Real T4 decode rate is unmeasured. Estimate 20–35 tok/s (2.4 B fp16 ≈ 4.9 GB against
-   320 GB/s → ~65 tok/s memory-bound ceiling; HF `generate` will not approach it).
-   Benchmark profile B's runtime budget depends on this. → Measure free on Kaggle.
-6. Do NF4-on-3060 and fp16-on-T4 agree closely enough for the smoke test to assert on
-   output *content*, or only on shape? Currently it asserts on shape plus non-zero
-   visual tokens.
-7. Measured Docker image size. Predicted 6–8 GB (torch+cu128 bundles ~4 GB of nvidia
-   wheels). Record the real number once built.
+5. Real T4 decode rate is unmeasured. The laptop under NF4 managed only **0.6–2.9 tok/s**,
+   which says nothing about a T4 — 4-bit dequant overhead dominates on a 6 GB laptop GPU.
+   Benchmark profile B's runtime budget still depends on this. → Measure free on Kaggle.
+6. Do NF4-on-3060 and fp16-on-T4 agree closely enough for the smoke test to assert on output
+   *content*, or only on shape? Still asserts on shape plus non-zero visual tokens. The NF4
+   outputs were accurate on both legs, so a content assertion now looks plausible.

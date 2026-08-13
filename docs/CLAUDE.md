@@ -154,7 +154,7 @@ security group only opens SSH from one IP.
 | Base | Post-trained from `Qwen3-VL-2B-Instruct`, identical architecture |
 | Model class | `transformers.Qwen3VLForConditionalGeneration` |
 | Processor class | `transformers.Qwen3VLProcessor` |
-| Total params | **2,438,696,960** — assert this at load |
+| Total params | **2,438,696,960** on the model card, but a live model reports **2,127,532,032**: `lm_head` is tied to `embed_tokens` and `model.parameters()` deduplicates shared tensors (difference = 151936 x 2048). Guard with a floor, **never** an equality check |
 | Min transformers | `>=4.57` (NVIDIA pins `4.57.3`) |
 | Pinned peers | `torch==2.9.0`, `accelerate==1.12.0`, `av==16.1.0`, `pillow==12.0.0`, `torchcodec==0.9.1` |
 | Attention | `sdpa` |
@@ -297,3 +297,107 @@ Findings that changed the design as it was built:
 
 **Nothing has run against real weights yet.** The service is code-complete and unit-tested
 but unproven end to end — see the "start here" block at the top of `docs/PLAN.md`.
+
+### 2026-08-12 — First real run: Phase 1 verified end to end ($0.00 spent, still local)
+
+**The service ran against real weights for the first time and the smoke test passes on both
+image and video.** Everything before this was code-complete but unproven.
+
+Verified load report (RTX 3060 Laptop 6 GB, NF4):
+
+| Field | Value |
+|---|---|
+| model class | `Qwen3VLForConditionalGeneration` |
+| device / GPU | `cuda:0` — NVIDIA GeForce RTX 3060 Laptop GPU, sm_86 |
+| quantization | bitsandbytes-nf4 (double quant, float16 compute), attn `sdpa` |
+| params total | **2,127,532,032** (see below — *not* 2,438,696,960) |
+| weights on device | **1,537,155,392 B (1.54 GB)** |
+| VRAM allocated | 1,587,655,168 B of 6,441,926,656 B |
+| load / warmup | 84.3 s / 18.5 s |
+
+Smoke test, both legs passing:
+
+- **image** — `in=336 (text=36, visual=300) out=43`. Answer correctly described the red box
+  and the dashed lane markings in the synthetic scene.
+- **video** — `in=557 (text=77, visual=480) out=21`. Answer: "A red rectangular object with
+  black squares moves horizontally across the gray road, advancing from left to right" —
+  i.e. it recovered the actual left-to-right motion, so temporal information survives the
+  fps=4 sampling path.
+- `cosmos_requests_total{status="ok"} 2.0` — metrics wired correctly.
+- Throughput on this laptop is **0.6–2.9 tok/s** under NF4. Not a T4 number and not
+  comparable to one; recorded only as a first datapoint.
+
+#### Open questions resolved
+
+- **Q3 — does NF4 quantize the ViT tower, or only the language model? IT QUANTIZES BOTH.**
+  Weights land at 1.54 GB, *under* the ~2 GB estimate. The arithmetic closes exactly:
+  1,812,185,088 quantized params x 0.5 B = 906 MB, plus 315,346,944 unquantized x 2 B =
+  631 MB, totalling 1537 MB against 1,537,155,392 B reported. The only things left in fp16
+  are the tied token embedding and ~4 M of norms/biases. Image quality is visibly fine.
+- **Q4 — torchcodec / FFmpeg. It failed, and FFmpeg was never the cause.** See below.
+- **Q7 — measured image size: 18.1 GB**, against a predicted 6–8 GB. Badly wrong; see below.
+
+#### The param count in STABLE is not what a live model reports
+
+`params.total` is **2,127,532,032**, not the documented 2,438,696,960. The shortfall is
+exactly 311,164,928 = 151936 x 2048 = vocab_size x hidden_size, i.e. one copy of the token
+embedding. Qwen3-VL-2B **ties `lm_head` to `embed_tokens`**, and `model.parameters()`
+deduplicates shared tensors, so a correct load can never report the model-card figure.
+
+The `MIN_EXPECTED_PARAMS` guard only survived this because it was written as a floor
+(`>= 2e9`) rather than an equality check. Had it asserted the exact number, it would have
+aborted every correct load. **Do not "fix" it to assert 2,438,696,960.**
+
+#### Bugs found by the first real run — all four were invisible to the test suite
+
+1. **`useradd: UID 1000 is not unique` — the build failed outright.** Ubuntu 24.04 ships a
+   default `ubuntu` user on UID 1000; 22.04 did not. Now `userdel --remove ubuntu` first.
+2. **The anti-mock class guard rejected a healthy model.** It unwrapped `model.base_model`
+   unconditionally, assuming that attribute is PEFT-specific. It is not — transformers'
+   `PreTrainedModel` defines `base_model` as a property returning
+   `getattr(self, self.base_model_prefix, self)`, which on
+   `Qwen3VLForConditionalGeneration` is the inner `Qwen3VLModel` backbone. Startup died on
+   "Loaded Qwen3VLModel, expected Qwen3VLForConditionalGeneration" — the anti-mock guard
+   eating a good load, the second time this class of bug has bitten (cf. the 4-bit param
+   unpacking). Now unwraps only for PEFT, via `get_base_model()`. **Three regression tests
+   added** — the suite went 32 -> 35 passed, 1 skipped, ruff clean.
+3. **Video decode failed, and the error message pointed at the wrong thing.** torchcodec
+   raised "FFmpeg is not properly installed". FFmpeg was installed correctly the whole
+   time — all five shared libs were present. Two real causes, stacked:
+   - `libtorchcodec_core6.so` could not find **`libtorch.so`**, which pip installs to
+     `site-packages/torch/lib`, a directory the dynamic loader does not search. The CUDA
+     base image sets `LD_LIBRARY_PATH=/usr/local/cuda/lib64` only. Fixed by *appending*
+     torch/lib (replacing it would break the GPU stack).
+   - then `libtorchcodec_custom_ops6.so` failed on **`libpython3.12.so.1.0`**. Ubuntu's
+     `python3` package ships the interpreter but not the shared libpython. The builder
+     stage had it via `python3-dev`; the runtime stage never did. The package is
+     **`libpython3.12t64`** — Ubuntu 24.04's time_t transition renamed it from
+     `libpython3.12`. Verified against `apt-cache` rather than guessed.
+4. **`scripts/smoke_test.py` aborted on the first HTTP error**, scrolling the passing image
+   result off screen. Each leg now reports a clean FAIL and continues.
+
+#### Two operational findings
+
+- **`restart: unless-stopped` turned a fatal config error into an infinite crash loop** —
+  16 restarts in 3 minutes on a missing token, re-hitting HuggingFace each time. On a paid
+  spot instance that burns GPU minutes on a typo. Changed to `restart: on-failure:3`, which
+  then earned itself back within the hour by recovering a DNS stall and by stopping cleanly
+  after the class-guard failure.
+- **Docker Desktop's embedded DNS resolver (192.168.65.7) dropped out mid-download** and
+  wedged the weight transfer in an unrecoverable name-resolution retry loop at 320 MB / 4.7 GB.
+  Pinned `dns: [8.8.8.8, 1.1.1.1]` and raised `HF_HUB_DOWNLOAD_TIMEOUT` to 60 s (HF's default
+  read timeout is 10 s, which any brief stall trips). Cold pull ran ~85 MB/min, ~50 min total.
+
+#### Image size: 18.1 GB, and why
+
+Predicted 6–8 GB. Layer breakdown: venv 7.56 GB, base image's `cuda-libraries` layer 3.11 GB,
+apt (python3 + ffmpeg + libpython + curl) 508 MB. Layer sum ~11.6 GB; `docker images` reports
+18.1 GB, the gap being buildx attestation manifests. **Both numbers recorded rather than the
+flattering one.**
+
+Root cause: **CUDA ships twice.** `nvidia/cuda:12.8.1-runtime` installs system CUDA libraries,
+and torch 2.9.0+cu128's wheels bundle their own cuBLAS/cuDNN/cuSPARSE/NCCL — torch uses the
+bundled copies. The `-base` tag is 411 MB versus `-runtime`'s 3.11 GB of libraries.
+**Candidate for Phase 2: switch the base to `-base` and re-verify.** Deliberately not changed
+today — it is a change to a working build, and it needs its own verification pass. It matters
+for Phase 2 because an 18 GB image is real paid GPU minutes to build or pull on the instance.
