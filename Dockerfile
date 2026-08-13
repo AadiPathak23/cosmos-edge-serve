@@ -57,6 +57,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH" \
+    # torchcodec's shared objects link against libtorch.so, which pip installs into
+    # site-packages/torch/lib — a directory the dynamic loader does not search. The
+    # CUDA base image sets LD_LIBRARY_PATH to /usr/local/cuda/lib64 only, so this
+    # appends rather than replaces; dropping the CUDA path breaks the GPU stack.
+    LD_LIBRARY_PATH="/opt/venv/lib/python3.12/site-packages/torch/lib:${LD_LIBRARY_PATH}" \
     # Weights land here, and here is a mounted volume. This single line is what
     # keeps ~5 GB of safetensors out of the image.
     HF_HOME=/models
@@ -68,6 +73,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # rather than anything actionable. Ubuntu 24.04 ships FFmpeg 6.x, which
         # torchcodec 0.9 supports.
         ffmpeg \
+        # torchcodec's libtorchcodec_custom_ops6.so also links against
+        # libpython3.12.so.1.0, which the `python3` package does NOT ship — only the
+        # interpreter. Without this, FFmpeg is installed correctly and video requests
+        # still fail with the same misleading "FFmpeg is not properly installed"
+        # message. Note the t64 suffix: Ubuntu 24.04's time_t transition renamed the
+        # package from libpython3.12 to libpython3.12t64.
+        libpython3.12t64 \
         # Used by the container healthcheck.
         curl \
     && rm -rf /var/lib/apt/lists/*
@@ -76,7 +88,13 @@ COPY --from=builder /opt/venv /opt/venv
 
 # Run as a non-root user. /models must be writable by it because the first start
 # downloads weights into the volume.
-RUN useradd --create-home --uid 1000 cosmos \
+#
+# Ubuntu 24.04 ships a default `ubuntu` user already occupying UID 1000, which
+# 22.04 did not — `useradd --uid 1000` fails outright with "UID 1000 is not
+# unique". Removing it first keeps cosmos on 1000, which is what a bind mount
+# from a Linux host would map to.
+RUN userdel --remove ubuntu 2>/dev/null || true \
+    && useradd --create-home --uid 1000 cosmos \
     && mkdir -p /models \
     && chown -R cosmos:cosmos /models
 
