@@ -87,6 +87,26 @@ def infer(url: str, file_path: Path, prompt: str, max_new_tokens: int | None) ->
         return json.load(response)
 
 
+class InferFailed(Exception):
+    """A leg of the smoke test returned an HTTP error.
+
+    Raised so one failing leg is reported as a FAIL and the run continues to the
+    others. An unhandled HTTPError here aborts the script mid-run and scrolls the
+    earlier, passing results off the screen — which is exactly what happened the
+    first time the video leg hit a 500.
+    """
+
+
+def infer_or_fail(url: str, file_path: Path, prompt: str, max_new_tokens: int | None) -> dict:
+    try:
+        return infer(url, file_path, prompt, max_new_tokens)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:400]
+        raise InferFailed(f"HTTP {exc.code}: {detail}") from exc
+    except OSError as exc:
+        raise InferFailed(str(exc)) from exc
+
+
 def _report(label: str, result: dict) -> None:
     tokens, timing = result["tokens"], result["timing_ms"]
     print(f"\n--- {label} " + "-" * (60 - len(label)))
@@ -132,32 +152,47 @@ def main() -> int:
     failures = 0
 
     print("\n==> Image request")
-    result = infer(
-        url,
-        image,
-        "Describe this scene. Is it safe for a vehicle to proceed straight ahead?",
-        args.max_new_tokens,
-    )
-    _report("image", result)
-    if result["tokens"]["visual"] <= 0:
-        print("  FAIL: visual token count is 0 — the image was not tokenised as vision input.")
+    try:
+        result = infer_or_fail(
+            url,
+            image,
+            "Describe this scene. Is it safe for a vehicle to proceed straight ahead?",
+            args.max_new_tokens,
+        )
+    except InferFailed as exc:
+        print(f"  FAIL: image request failed — {exc}")
         failures += 1
-    if not (result["answer"] or result["reasoning"]):
-        print("  FAIL: model returned nothing at all.")
-        failures += 1
+    else:
+        _report("image", result)
+        if result["tokens"]["visual"] <= 0:
+            print("  FAIL: visual token count is 0 — the image was not tokenised as vision input.")
+            failures += 1
+        if not (result["answer"] or result["reasoning"]):
+            print("  FAIL: model returned nothing at all.")
+            failures += 1
 
     if not args.skip_video:
         if not video.exists():
             print(f"\n==> Skipping video: {video} missing. Run scripts/make_assets.py")
         else:
             print("\n==> Video request")
-            result = infer(
-                url, video, "What happens in this video? Describe the motion.", args.max_new_tokens
-            )
-            _report("video", result)
-            if result["tokens"]["visual"] <= 0:
-                print("  FAIL: visual token count is 0 for video.")
+            try:
+                result = infer_or_fail(
+                    url,
+                    video,
+                    "What happens in this video? Describe the motion.",
+                    args.max_new_tokens,
+                )
+            except InferFailed as exc:
+                print(f"  FAIL: video request failed — {exc}")
+                print("  (a libtorchcodec load error here means the image is missing")
+                print("   libpython3.12t64 or torch/lib on LD_LIBRARY_PATH)")
                 failures += 1
+            else:
+                _report("video", result)
+                if result["tokens"]["visual"] <= 0:
+                    print("  FAIL: visual token count is 0 for video.")
+                    failures += 1
 
     print("\n" + "=" * 70)
     if failures:
