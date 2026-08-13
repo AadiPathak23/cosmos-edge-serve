@@ -11,7 +11,9 @@ import torch
 from app.config import Settings
 from app.model import (
     ModelLoadError,
+    Placement,
     _load_failure_message,
+    _verify,
     count_parameters,
     resolve_placement,
 )
@@ -104,3 +106,65 @@ def test_bfloat16_is_refused_on_turing() -> None:
     settings = Settings(device="cuda", quant="none", dtype="bfloat16")
     with pytest.raises(ModelLoadError, match="no bfloat16 support"):
         resolve_placement(settings)
+
+
+class _Qwen3VLModel(torch.nn.Module):
+    """Stands in for the inner backbone that `base_model_prefix` points at."""
+
+
+class Qwen3VLForConditionalGeneration(torch.nn.Module):
+    """A stand-in for the real model class, reproducing the attribute that broke us.
+
+    transformers' `PreTrainedModel` exposes `base_model` as a *property* returning
+    `getattr(self, self.base_model_prefix, self)` — it is not PEFT-specific. The
+    class guard used to unwrap it unconditionally.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = _Qwen3VLModel()
+        self.weight = torch.nn.Parameter(torch.zeros(4))
+
+    @property
+    def base_model(self) -> torch.nn.Module:
+        return self.model
+
+
+class PeftModel(torch.nn.Module):
+    """A PEFT wrapper, which genuinely does need unwrapping."""
+
+    def __init__(self, wrapped: torch.nn.Module) -> None:
+        super().__init__()
+        self.wrapped = wrapped
+
+    def get_base_model(self) -> torch.nn.Module:
+        return self.wrapped
+
+
+def _cpu_placement() -> Placement:
+    return Placement(device="cpu", torch_dtype=torch.float32)
+
+
+def test_plain_model_is_not_mistaken_for_its_own_backbone() -> None:
+    """Regression: the class guard rejected a healthy load.
+
+    `Qwen3VLForConditionalGeneration.base_model` returns the inner `Qwen3VLModel`,
+    so unconditional unwrapping aborted startup with "Loaded Qwen3VLModel, expected
+    Qwen3VLForConditionalGeneration" against real weights. Reaching the *parameter*
+    check proves the class gate let it through.
+    """
+    with pytest.raises(ModelLoadError, match="parameters"):
+        _verify(Qwen3VLForConditionalGeneration(), _cpu_placement(), Settings())
+
+
+def test_peft_wrapper_is_still_unwrapped() -> None:
+    """The unwrap must survive for the case it was written for."""
+    wrapped = PeftModel(Qwen3VLForConditionalGeneration())
+    with pytest.raises(ModelLoadError, match="parameters"):
+        _verify(wrapped, _cpu_placement(), Settings())
+
+
+def test_a_genuinely_wrong_class_is_still_refused() -> None:
+    """The guard must keep doing its actual job."""
+    with pytest.raises(ModelLoadError, match="Refusing to serve the wrong model"):
+        _verify(_Qwen3VLModel(), _cpu_placement(), Settings())

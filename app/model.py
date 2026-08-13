@@ -476,8 +476,17 @@ def _verify(model: Any, placement: Placement, settings: Settings) -> None:
     it produces plausible numbers that mean nothing.
     """
     # A PEFT-wrapped model reports PeftModel/PeftModelForCausalLM, so check the base.
-    base = getattr(model, "base_model", None)
-    inner = getattr(base, "model", base) if base is not None else model
+    #
+    # Unwrap ONLY for PEFT. `base_model` is not a PEFT-specific attribute: transformers'
+    # own PreTrainedModel defines it as a property returning
+    # `getattr(self, self.base_model_prefix, self)`, which on
+    # Qwen3VLForConditionalGeneration resolves to the inner Qwen3VLModel backbone.
+    # Unwrapping unconditionally therefore inspected the backbone and aborted startup
+    # with "Loaded Qwen3VLModel, expected Qwen3VLForConditionalGeneration" on a
+    # completely healthy load — the anti-mock guard eating a good model.
+    inner = model
+    if type(model).__name__.startswith("Peft") and hasattr(model, "get_base_model"):
+        inner = model.get_base_model()
     actual_class = type(inner).__name__
     if actual_class != EXPECTED_MODEL_CLASS:
         raise ModelLoadError(
