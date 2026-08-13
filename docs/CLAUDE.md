@@ -401,3 +401,88 @@ bundled copies. The `-base` tag is 411 MB versus `-runtime`'s 3.11 GB of librari
 **Candidate for Phase 2: switch the base to `-base` and re-verify.** Deliberately not changed
 today — it is a change to a working build, and it needs its own verification pass. It matters
 for Phase 2 because an 18 GB image is real paid GPU minutes to build or pull on the instance.
+
+### 2026-08-13 — Image shrunk to 13.5 GB; Kaggle T4 harness written ($0.00 spent, still local)
+
+Two pieces of free work done while the AWS G-family spot quota request is pending. **No cloud
+spend, no AWS action taken.**
+
+#### The `-base` switch worked, but only after video decode broke a third time
+
+Image is now **13.5 GB reported / 8.71 GB of layers**, down from 18.1 GB / ~11.6 GB — a **25%
+cut on both measures**. `ARG CUDA_IMAGE` already parameterised the base, so the change itself
+was one line; the verification is what had substance.
+
+**The naive swap broke video decode**, and the failing dependency was not one of the obvious
+ones. The image leg passed and the model loaded fine, so this would have been easy to call a
+success. `ldd` on `libtorchcodec_core6.so` inside the container named the two missing libraries
+directly, rather than the misleading "FFmpeg is not properly installed" that torchcodec surfaces
+for every load failure (the same wrong-signpost problem as 2026-08-12; FFmpeg was again fine):
+
+- **`libnvrtc.so.12`** — torch *does* bundle this, at `site-packages/nvidia/cuda_nvrtc/lib`. It
+  was simply not on `LD_LIBRARY_PATH`. Free to fix, same shape of bug as the `libtorch.so` fix.
+- **`libnppicc.so.12`** — NVIDIA Performance Primitives. **torch does not bundle NPP at all**
+  (there is no `site-packages/nvidia/npp`), because torch has no use for it; torchcodec uses it
+  for colour-space conversion. `-runtime` had been supplying it incidentally inside the 3.11 GB
+  blob. Fixed by apt-installing just `libnpp-12-8`: **+320 MB** on the apt layer (518 → 838 MB)
+  against the 3.11 GB it replaces.
+
+It is a **link-time** dependency of `libtorchcodec_core6.so`, not a `dlopen`, so video fails at
+import even on a CPU-only decode path. This is not a GPU-decode-only requirement.
+
+**The generalisable rule, now recorded in the Dockerfile:** torch's bundled wheels cover what
+*torch* needs and nothing more. Any other package in the venv that links against CUDA libraries
+must have its dependencies satisfied explicitly. `-base` is the right default precisely because
+it makes that dependency explicit instead of accidental.
+
+#### Correction: the layer-sum vs `docker images` gap is not attestation manifests
+
+The 2026-08-12 entry above attributed the ~6.5 GB gap to buildx attestation manifests. **That
+was wrong** — attestation manifests are kilobytes. Do not carry that explanation forward.
+
+Docker Desktop here runs the **containerd image store** (`docker info` → `driver-type
+io.containerd.snapshotter.v1`), where `docker images` SIZE counts the content store — the
+compressed blobs *and* the unpacked snapshot — rather than just the unpacked image. The gap
+tracks the layer sum at a consistent ~55% across all three builds measured (11.6→18.1, 8.39→12.9,
+8.71→13.5) and matches the same ratio on both nvidia base images, which is what a stored
+compressed copy of the same content looks like. Inferred from that ratio rather than measured
+blob-by-blob, but the attestation explanation is ruled out either way.
+
+**Practical consequence for Phase 2: the number that costs paid GPU minutes is the compressed
+pull, ~4.8 GB, down from ~6.5 GB.** Neither 13.5 nor 8.71 is the figure to plan the instance
+around. All three recorded rather than the flattering one.
+
+#### Verified, not assumed
+
+- Smoke test passes **both** legs. The video answer is byte-identical to the 2026-08-12 run
+  ("A red rectangular object with black squares moves horizontally across the gray road,
+  advancing from left to right"), with identical token counts on both legs (image in=336,
+  visual=300, out=43; video in=557, visual=480, out=21). Decoding is greedy, so this is
+  deterministic and is real evidence the shrink is functionally inert — not just "it ran".
+- `pytest` **35 passed, 1 skipped** — matches the pre-change baseline. `ruff check .` clean.
+- Load report unchanged: `Qwen3VLForConditionalGeneration`, `cuda:0`, bitsandbytes-nf4,
+  2,127,532,032 params.
+
+#### Kaggle T4 harness written (not yet run)
+
+`scripts/kaggle_t4_check.py` + `docs/KAGGLE.md`, to resolve open question 5 (real T4 decode
+rate) for free before any paid minute. It calls the service's own `load_model()` and
+`run_inference()` rather than reimplementing them, so the tok/s comes from the same code path
+the benchmark will use — including the `torch.cuda.synchronize()`, without which the numbers
+would be meaningless. Kaggle has no Docker daemon, so it runs natively from a clone; the
+container and the queue are therefore *not* covered, which is exactly why EC2 is still needed.
+
+Design decisions worth keeping: it refuses to record numbers from a non-T4 (Kaggle also hands
+out P100s, and a Pascal decode rate published as "the T4 number" would silently invalidate the
+Phase 2 budget); it pins `CUDA_VISIBLE_DEVICES=0` before torch is imported because Kaggle's T4 x2
+would otherwise not match `g4dn.xlarge`; and it discards the first run per leg, because
+`load_model()`'s warmup only touches an image and the first video request still pays a one-time
+torchcodec init.
+
+#### Environment note
+
+There is **no Python environment on the dev host with the project's dependencies** — no venv, no
+torch, and neither `ruff` nor `pytest` installed. The "35 passed, ruff clean" recorded on
+2026-08-11 came from an environment that no longer exists. `pytest` now runs inside the
+container (`docker run -u root -v <repo>:/work` + a small pip install of the dev deps), which
+reuses the 4 GB torch stack already in the image instead of duplicating it on the host.

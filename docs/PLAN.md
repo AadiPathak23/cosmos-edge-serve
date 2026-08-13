@@ -2,33 +2,49 @@
 
 **Status: Phase 1 is COMPLETE and verified end to end on the RTX 3060.**
 The service loads real weights, and the smoke test passes on **both image and video**.
+The image has been shrunk to 13.5 GB and re-verified.
 **Budget spent to date: $0.00 / $10.00**
 
 ---
 
 ## ▶ START HERE (next session)
 
-Phase 1 is done. Everything below this block is context. These are the next actions, in order.
+Phase 1 is done and the image shrink is done. These are the next actions, in order.
 
-**1. File the AWS quota increase** *(free, but takes 1–3 days — do it first)*
-Service Quotas → EC2 → "All G and VT Spot Instance Requests" → request ≥4 vCPUs.
-New accounts sit at 0. This is the only thing that can block Phase 2 for reasons
-unrelated to the code, so get it in flight before anything else.
+**1. ⚠️ File the AWS quota increase — BLOCKING, and only you can do it**
+*(free, ~5 min to file, 1–3 days to land)*
 
-**2. Kaggle T4 check** *(free)*
-Run with `COSMOS_QUANT=none` on a Kaggle T4 to prove the fp16 path, and measure the real
-decode rate in tok/s. Benchmark profile B's runtime budget depends on that number
-(open question 5) — measure it free before paying for EC2. On the laptop under NF4 we
-saw only **0.6–2.9 tok/s**, which is not a T4 number and must not be used to size anything.
-Also raise `COSMOS_MAX_VISION_TOKENS` to 4096 there: NF4 used just 1.59 GB of 6 GB, so a
-16 GB T4 at fp16 has plenty of room.
+This is the long pole. Nothing about the code can unblock it.
 
-**3. Consider shrinking the image before Phase 2** *(free, local)*
-It measures **18.1 GB**, not the predicted 6–8 GB, because CUDA ships twice — the
-`nvidia/cuda:12.8.1-runtime` base installs system CUDA libraries *and* torch's `+cu128`
-wheels bundle their own. Try `nvidia/cuda:12.8.1-base-ubuntu24.04` (411 MB vs 3.11 GB of
-libraries) and re-run the smoke test. Worth doing before Phase 2: an 18 GB image is real
-paid GPU minutes to build or pull on the instance.
+1. Console → **region selector → US East (N. Virginia) `us-east-1`** *first*. Quotas are
+   per-region; filing in the wrong region wastes the 1–3 days.
+2. **Service Quotas → AWS services → Amazon EC2 →** search
+   **`All G and VT Spot Instance Requests`** (code **`L-3819A6DF`**).
+3. **Read the applied value before filing.** It may already be ≥ 4, in which case Phase 2 is
+   unblocked immediately.
+4. If 0: **Request increase at account level → `4`**. The unit is **vCPUs**, not instances —
+   `g4dn.xlarge` is exactly 4. Ask for 4, not 8; minimal asks auto-approve far more often.
+
+Traps: **spot and on-demand are separate quotas** — `L-3819A6DF` is spot only. If it is
+rejected, reopen as a support case with a one-line justification. If AWS refuses outright, the
+fallback is **Lightning AI Studios** (free GPU hours on a real VM *with* a Docker daemon —
+the only free option that can run this container at all).
+
+Region note: connecting from outside the US changes **nothing** about the benchmark. k6 runs
+on the instance against `localhost`, so the client is never in the measurement path; only SSH
+round-trip time changes. us-east-1 also has the deepest g4dn spot capacity, which lowers the
+interruption risk that would actually cost money in a redo.
+
+**2. Kaggle T4 check** *(free — harness is written and ready)*
+Follow **`docs/KAGGLE.md`** and run `scripts/kaggle_t4_check.py` on a Kaggle T4. Proves the
+fp16 path and measures the real decode rate, resolving open question 5. On the laptop under
+NF4 we saw only **0.6–2.9 tok/s**, which is not a T4 number and must not be used to size
+anything. Paste `kaggle_t4_results.json` back to size profile B's runtime and cost.
+
+**3. Decide on a billing guard before any AWS spend** *(free, needs a call)*
+Signup credits are expired, so Phase 2 is real money on a real card. An AWS Budgets alert at
+$5 is free and is the obvious guard — but **Budgets is a service beyond EC2 + S3**, which this
+repo's constraints require asking about first. Unresolved; decide before Phase 2 starts.
 
 **To reproduce the working local run:**
 ```bash
@@ -143,13 +159,21 @@ Do not start a phase until the previous one is confirmed working.
 - [x] Multi-stage Dockerfile. Builder and runtime share the same CUDA base on purpose:
       a venv records an absolute interpreter path, so building against `python:3.12-slim`
       and copying across would leave the venv pointing at a binary that does not exist.
-- [x] `nvidia/cuda:12.8.1-runtime-ubuntu24.04`, ffmpeg **plus `libpython3.12t64`** for
-      torchcodec, curl for the healthcheck, non-root user (UID 1000 needs `userdel ubuntu`
-      first on 24.04), and torch/lib appended to `LD_LIBRARY_PATH`
+- [x] `nvidia/cuda:12.8.1-base-ubuntu24.04` (was `-runtime`; see the shrink below), ffmpeg
+      **plus `libpython3.12t64`** and **`libnpp-12-8`** for torchcodec, curl for the
+      healthcheck, non-root user (UID 1000 needs `userdel ubuntu` first on 24.04), and both
+      torch/lib and cuda_nvrtc/lib appended to `LD_LIBRARY_PATH`
 - [x] `HF_HOME=/models` + named volume — **weights never baked into the image**
 - [x] `HF_TOKEN` threaded through compose (required: the repo is gated)
 - [x] Build it and **record the measured image size** in the CHANGELOG — **18.1 GB**, vs 6–8 GB predicted
 - [x] Verify GPU passthrough end to end on the laptop
+- [x] **Shrink the image before Phase 2** — `-base` instead of `-runtime`:
+      **13.5 GB reported / 8.71 GB layers / ~4.8 GB compressed pull**, down from
+      18.1 / ~11.6 / ~6.5. The compressed pull is the figure that costs paid GPU minutes.
+      The swap broke video decode until `libnpp-12-8` (+320 MB) was added back and
+      `cuda_nvrtc/lib` was put on `LD_LIBRARY_PATH` — **torch bundles what torch needs and
+      nothing more; torchcodec's CUDA dependencies are its own problem.** Re-verified: both
+      smoke-test legs pass with byte-identical output and token counts to the pre-shrink run.
 
 ### 1.8 Verify Phase 1
 
@@ -164,11 +188,17 @@ Do not start a phase until the previous one is confirmed working.
       visual token counts (visual=300 image, visual=480 video). Assets already exist on the
       host; do **not** run `make_assets.py` inside the container — compose mounts only
       `cosmos-models:/models`, so files written there are invisible to the host-side test.
-- [ ] Same image on a **Kaggle T4** with `COSMOS_QUANT=none` → fp16 path works ← NEXT
+- [x] Harness for the T4 check written: `scripts/kaggle_t4_check.py` + `docs/KAGGLE.md`.
+      Runs natively (Kaggle has no Docker daemon) but through the service's own
+      `load_model()` / `run_inference()`, so the timings come from the real code path.
+- [ ] Run it: **Kaggle T4** with fp16 → prove the `COSMOS_QUANT=none` path ← NEXT (free)
 - [ ] Measure real T4 decode rate on Kaggle (free) to size benchmark profile B
 - [ ] ⚠️ **File the AWS G-family vCPU quota increase** — free, but takes 1–3 days.
-      Service Quotas → EC2 → "All G and VT Spot Instance Requests" → request ≥4 vCPUs.
-      New accounts sit at 0 and Phase 2 cannot launch without it.
+      `us-east-1` → Service Quotas → EC2 → `All G and VT Spot Instance Requests`
+      (`L-3819A6DF`) → request **4 vCPUs**. Default is 0 and Phase 2 cannot launch
+      without it. Full steps in the START HERE block above.
+- [ ] Decide whether to add a $5 AWS Budgets alert (free, but a service beyond EC2 + S3,
+      so it needs an explicit call before Phase 2)
 
 ---
 
@@ -257,7 +287,13 @@ thing that needs it. Debugging on a rented GPU is what turns a $1 run into a $5 
    in the Dockerfile; video decode verified end to end.
 7. ~~Measured Docker image size~~ → **18.1 GB**, vs 6–8 GB predicted. CUDA ships twice: the
    `-runtime` base's system CUDA libraries (3.11 GB) plus torch's bundled `+cu128` wheels.
-   Switching to the `-base` tag is a candidate fix, not yet attempted.
+   ~~Switching to the `-base` tag is a candidate fix, not yet attempted.~~ → **Done
+   2026-08-13: 13.5 GB reported / 8.71 GB layers / ~4.8 GB compressed pull.** The swap
+   required adding `libnpp-12-8` back (torchcodec links against `libnppicc.so.12` at load
+   time, and torch does *not* bundle NPP) and putting the venv's `cuda_nvrtc/lib` on
+   `LD_LIBRARY_PATH`. Also **corrected a wrong explanation**: the layer-sum vs `docker images`
+   gap is the containerd image store counting compressed blobs *plus* the unpacked snapshot,
+   not buildx attestation manifests (which are kilobytes).
 
 **New, found during the first real run**
 
@@ -273,4 +309,19 @@ thing that needs it. Debugging on a rented GPU is what turns a $1 run into a $5 
    Benchmark profile B's runtime budget still depends on this. → Measure free on Kaggle.
 6. Do NF4-on-3060 and fp16-on-T4 agree closely enough for the smoke test to assert on output
    *content*, or only on shape? Still asserts on shape plus non-zero visual tokens. The NF4
-   outputs were accurate on both legs, so a content assertion now looks plausible.
+   outputs were accurate on both legs, so a content assertion now looks plausible. The
+   2026-08-13 rebuild showed NF4 output is *byte-stable across rebuilds* under greedy
+   decoding, which is a necessary but not sufficient condition — the open part is whether it
+   survives a precision change. `scripts/kaggle_t4_check.py` records sample answers precisely
+   so this can be compared.
+
+**New, found during the image shrink (2026-08-13)**
+
+9. **How much more of the 8.71 GB is removable?** The venv layer is 7.56 GB and dominates
+   everything else now. It contains nvidia-* wheels torch pulls in unconditionally but which
+   a single-GPU inference service never uses — `nccl` (multi-GPU collectives), `cusparselt`,
+   `nvshmem`, `cufile`. Stripping them could plausibly halve the layer again. **Not attempted
+   and not obviously safe**: torch imports some of these eagerly, and the failure mode would
+   be a load-time `dlopen` error, i.e. exactly the class of bug this shrink just spent a
+   rebuild cycle on. Only worth doing if pull time on the instance turns out to matter, and
+   it must be gated on the same both-legs smoke test.
