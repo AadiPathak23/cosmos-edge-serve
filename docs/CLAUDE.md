@@ -486,3 +486,23 @@ torch, and neither `ruff` nor `pytest` installed. The "35 passed, ruff clean" re
 2026-08-11 came from an environment that no longer exists. `pytest` now runs inside the
 container (`docker run -u root -v <repo>:/work` + a small pip install of the dev deps), which
 reuses the 4 GB torch stack already in the image instead of duplicating it on the host.
+
+#### AWS Budgets approved as the one exception to the EC2 + S3 rule
+
+The anti-goal above reads "No AWS service beyond EC2 and S3 **without asking**." Asking
+happened: a **$5 monthly cost budget** was proposed and **approved on 2026-08-13**, on the
+grounds that the signup credits are expired and Phase 2 is real money on a real card. It costs
+$0.00 (the first two budgets are free; $0.02/day each beyond that, so keep the count at two).
+Setup steps and the undo live in `docs/PLAN.md`. **No other service is thereby authorised.**
+
+**It is a backstop, not a kill switch, and nothing in the plan may lean on it as one.** Budgets
+reads Cost Explorer, which refreshes roughly three times a day and lags real usage by **8–24
+hours**. A forgotten `g4dn.xlarge` spot instance at ~$0.32/hr burns **$3–8 before the first
+email lands** — most of a $10 ceiling. Hence alerts at 40/80/100% of $5 *plus* one on
+**forecasted** cost, which is the only one that can fire before the money is already gone.
+
+The actual cost control is unchanged and procedural: the benchmark is ~3 hours, teardown runs
+the same day, and it is verified in the console rather than from memory. The budget exists to
+catch the case where that procedure fails — a forgotten instance, an EBS volume that outlived
+its instance, a bucket still holding weights. For the same reason it is **kept, not deleted, at
+teardown**: removing it on teardown day would drop the guard exactly when it is most needed.

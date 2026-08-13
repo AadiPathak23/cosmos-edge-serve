@@ -41,10 +41,34 @@ fp16 path and measures the real decode rate, resolving open question 5. On the l
 NF4 we saw only **0.6–2.9 tok/s**, which is not a T4 number and must not be used to size
 anything. Paste `kaggle_t4_results.json` back to size profile B's runtime and cost.
 
-**3. Decide on a billing guard before any AWS spend** *(free, needs a call)*
-Signup credits are expired, so Phase 2 is real money on a real card. An AWS Budgets alert at
-$5 is free and is the obvious guard — but **Budgets is a service beyond EC2 + S3**, which this
-repo's constraints require asking about first. Unresolved; decide before Phase 2 starts.
+**3. Set up the $5 budget guard** *(free, ~3 min, do it in the same console session as step 1)*
+
+Signup credits are expired, so Phase 2 is real money on a real card. **AWS Budgets is a
+service beyond EC2 + S3 and was explicitly approved on 2026-08-13** — it is the one sanctioned
+exception, and it exists only to protect the $10 ceiling.
+
+1. **Console → Billing and Cost Management → Budgets → Create budget.**
+2. Choose **Customize (advanced)** → **Cost budget**.
+3. Period **Monthly**, type **Recurring**, budgeted amount **`5.00`** USD.
+4. Add **three** alerts, all on **Actual** cost, emailing your address:
+   **40% ($2)**, **80% ($4)**, **100% ($5)**.
+5. Also add one on **Forecasted** at **100%** — it is the only one that can fire *before*
+   the money is spent.
+
+*(undo: Billing → Budgets → select the budget → Delete)*
+
+**⚠️ A budget alert is a backstop, not a kill switch — and you must not plan around it as
+one.** Budgets reads Cost Explorer data, which refreshes roughly three times a day and lags
+actual usage by **8–24 hours**. A `g4dn.xlarge` spot instance left running at ~$0.32/hr can
+burn **$3–8 before the first email arrives**, which on a $10 ceiling is most of the budget.
+
+The real guard is unchanged and is procedural: the benchmark is ~3 hours, **teardown runs the
+same day**, and it is verified in the console rather than from memory. The budget is what
+catches the case where that procedure fails — a forgotten instance, an EBS volume that
+outlived its instance, a bucket left holding weights.
+
+Cost of the guard itself: **$0.00.** The first two budgets are free; beyond that AWS charges
+$0.02/day each, so keep the total at two or fewer.
 
 **To reproduce the working local run:**
 ```bash
@@ -197,8 +221,10 @@ Do not start a phase until the previous one is confirmed working.
       `us-east-1` → Service Quotas → EC2 → `All G and VT Spot Instance Requests`
       (`L-3819A6DF`) → request **4 vCPUs**. Default is 0 and Phase 2 cannot launch
       without it. Full steps in the START HERE block above.
-- [ ] Decide whether to add a $5 AWS Budgets alert (free, but a service beyond EC2 + S3,
-      so it needs an explicit call before Phase 2)
+- [ ] **Set up the $5 AWS Budgets guard** — approved 2026-08-13 as the sanctioned exception
+      to the EC2 + S3 rule. Alerts at 40/80/100% actual plus 100% forecasted. Free (first two
+      budgets). *(undo: Billing → Budgets → select → Delete)*. **Not a kill switch** — see
+      the 8–24 h Cost Explorer lag noted in START HERE.
 
 ---
 
@@ -255,7 +281,10 @@ thing that needs it. Debugging on a rented GPU is what turns a $1 run into a $5 
 - [ ] Run both sweeps on the instance against `localhost:8000`
 - [ ] `loadtest/render_results.py` → markdown tables committed to README + docs
 - [ ] Write `docs/TEARDOWN.md` (terminate, verify EBS deleted, release EIP, empty and
-      delete the bucket, delete snapshots/AMIs, confirm $0 in Cost Explorer 24 h later)
+      delete the bucket, delete snapshots/AMIs, confirm $0 in Cost Explorer 24 h later).
+      **Keep the $5 budget** — it is the thing that catches a teardown that quietly missed
+      something, so deleting it on teardown day would remove the guard exactly when it is
+      most needed. Delete it only when the project is finished for good.
 - [ ] ✅ **Run teardown the same day. Verify in the console, not from memory.**
 
 ---
