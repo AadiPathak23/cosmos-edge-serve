@@ -2,17 +2,35 @@
 #
 # Multi-stage build for cosmos-edge-serve.
 #
-# Size expectations, stated honestly: torch 2.9.0+cu128 bundles roughly 4 GB of
-# nvidia-* CUDA wheels, and there is no way around that for a GPU service. The
-# realistic finished image is 6-8 GB. What multi-stage actually buys here is
-# leaving pip, setuptools, the wheel cache, and apt lists behind in the builder.
+# Size, measured rather than predicted. The first working build used the
+# `-runtime` CUDA tag and came out at **18.1 GB** against a 6-8 GB prediction,
+# because **CUDA ships twice**: `-runtime` installs 3.11 GB of system CUDA math
+# libraries (cuBLAS/cuDNN/cuSPARSE/NCCL) *and* torch 2.9.0+cu128's wheels bundle
+# their own copies — and the bundled ones are what torch actually loads. Nearly
+# all of the system set was dead weight.
 #
-# What keeps this from being a 12 GB image is the thing that matters most:
-# **model weights are never baked in.** They live in the `cosmos-models` volume
-# mounted at /models (HF_HOME), so the image stays the same size whether you are
-# serving the 2B or nothing at all.
+# Hence the `-base` tag below (411 MB vs 3.11 GB of libraries), which brings the
+# image to 13.5 GB reported / 8.71 GB of layers. The remaining ~4 GB of nvidia-*
+# wheels inside the venv is irreducible for a GPU service.
+#
+# "Nearly all", not all: the swap broke video decode, because torchcodec — not
+# torch — needs two things `-runtime` was supplying incidentally. libnvrtc.so.12
+# turned out to be bundled in the venv already and just needed to be on
+# LD_LIBRARY_PATH, but **NPP is not bundled by torch at all** and had to come
+# back via apt. Both are handled below, each at the line that needs it. The rule
+# that generalises: torch's wheels cover what *torch* needs, and nothing else in
+# the venv is entitled to assume the same.
+#
+# What multi-stage buys on top of that is leaving pip, setuptools, the wheel
+# cache, and apt lists behind in the builder. And the single biggest saving is
+# the thing that is not here at all: **model weights are never baked in.** They
+# live in the `cosmos-models` volume mounted at /models (HF_HOME), so the image
+# is the same size whether you are serving the 2B or nothing at all.
+#
+# To rebuild against the old base for comparison:
+#   docker build --build-arg CUDA_IMAGE=nvidia/cuda:12.8.1-runtime-ubuntu24.04 .
 
-ARG CUDA_IMAGE=nvidia/cuda:12.8.1-runtime-ubuntu24.04
+ARG CUDA_IMAGE=nvidia/cuda:12.8.1-base-ubuntu24.04
 
 # ---------------------------------------------------------------------------
 # Stage 1: builder — resolve and install dependencies into a venv
@@ -61,7 +79,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     # site-packages/torch/lib — a directory the dynamic loader does not search. The
     # CUDA base image sets LD_LIBRARY_PATH to /usr/local/cuda/lib64 only, so this
     # appends rather than replaces; dropping the CUDA path breaks the GPU stack.
-    LD_LIBRARY_PATH="/opt/venv/lib/python3.12/site-packages/torch/lib:${LD_LIBRARY_PATH}" \
+    #
+    # cuda_nvrtc is here for the same reason: libtorchcodec_core6.so links against
+    # libnvrtc.so.12, which the `-runtime` base used to supply system-wide. torch
+    # bundles its own copy in site-packages/nvidia/cuda_nvrtc/lib, so pointing at
+    # that costs nothing — the wheel is already paid for in the venv layer.
+    LD_LIBRARY_PATH="/opt/venv/lib/python3.12/site-packages/torch/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:${LD_LIBRARY_PATH}" \
     # Weights land here, and here is a mounted volume. This single line is what
     # keeps ~5 GB of safetensors out of the image.
     HF_HOME=/models
@@ -80,6 +103,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # message. Note the t64 suffix: Ubuntu 24.04's time_t transition renamed the
         # package from libpython3.12 to libpython3.12t64.
         libpython3.12t64 \
+        # NVIDIA Performance Primitives. libtorchcodec_core6.so has a *link-time*
+        # dependency on libnppicc.so.12 (colour-space conversion), so video decode
+        # fails at import even on the CPU path without it — this is not a
+        # GPU-decode-only requirement.
+        #
+        # torch does NOT bundle NPP the way it bundles cuBLAS/cuDNN/nvrtc (there is
+        # no site-packages/nvidia/npp), because torch itself has no use for it. The
+        # `-runtime` base used to supply this incidentally inside its 3.11 GB
+        # cuda-libraries blob; installing just this one package is the targeted
+        # version of that, at a fraction of the size.
+        libnpp-12-8 \
         # Used by the container healthcheck.
         curl \
     && rm -rf /var/lib/apt/lists/*
