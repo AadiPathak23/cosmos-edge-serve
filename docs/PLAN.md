@@ -195,6 +195,18 @@ during Phase 1: mirroring to S3 means `HF_TOKEN` never has to live on the EC2 bo
 
 Worst case with one failed run and a redo: **~$3**. Ceiling is $10.
 
+**Free-GPU alternatives were considered and consciously declined (decided 2026-08-13).**
+Kaggle and Colab are free but run notebooks, not servers: no Docker daemon, so the container
+this entire phase was spent building and debugging would go untested, and there is no way to
+drive concurrent load at a running service. Lightning AI Studios *would* work — free monthly
+GPU hours on a real VM with Docker — and is the fallback if the AWS quota is refused. It was
+declined because "cloud GPU deployment" and S3 are stated learning goals of this repo, and
+~$1 of a $10 budget is a reasonable price for them.
+
+**Cost discipline that follows from this:** use Kaggle (free) for everything it *can* do —
+the fp16 path and the decode-rate measurement — so the paid instance only ever runs the one
+thing that needs it. Debugging on a rented GPU is what turns a $1 run into a $5 one.
+
 ### Tasks
 
 - [ ] 🛑 **STOP — confirm the cost table above before any AWS action**
