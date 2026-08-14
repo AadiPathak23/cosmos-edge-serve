@@ -506,3 +506,53 @@ the same day, and it is verified in the console rather than from memory. The bud
 catch the case where that procedure fails — a forgotten instance, an EBS volume that outlived
 its instance, a bucket still holding weights. For the same reason it is **kept, not deleted, at
 teardown**: removing it on teardown day would drop the guard exactly when it is most needed.
+
+### 2026-08-14 — Phase 2 harness and runbooks built and dry-run ($0.00 spent, still local)
+
+New: `loadtest/load.js`, `loadtest/render_results.py`, `docs/EC2.md`, `docs/TEARDOWN.md`. All
+exercised against the local NF4 service so the paid instance only pulls, runs, and tears down.
+**No AWS action taken.** The three console steps (spot quota, $5 budget, Kaggle check) are all
+still outstanding; the quota is the 1–3 day long pole.
+
+**The 300 s request timeout would have published timeouts instead of latencies.**
+`COSMOS_REQUEST_TIMEOUT_S` covers queue wait *plus* compute (`app/queue.py`). With one serial
+worker the last of N requests waits ~`(N-1) x per-request`, so profile B (1024 tok) at 8 VUs
+returns 504 at 10, 15 *and* 25 tok/s — every rate plausible for a T4. `docs/EC2.md` sets 900 on
+the instance with the reasoning inline next to the value, because it reads like a safety limit
+and would otherwise get tuned back down.
+
+**Three harness bugs the dry run found, none reachable by unit tests:**
+
+1. k6's `setupTimeout` defaults to **60 s** — it would have killed the `/health` wait before a
+   cold model load finished. Now `45m`.
+2. Without honouring `Retry-After`, a rejected VU re-fires instantly, so the 503 count measures
+   how fast k6 spins, not offered load: **34,504 rejections in 45 s** at queue depth 2. With
+   backoff, 57.
+3. Sleeping *exactly* `Retry-After` then produced 15 spurious `EOF` errors — no 5xx, nothing in
+   the service log. `Retry-After` is 5 s and **uvicorn's `--timeout-keep-alive` default is also
+   5 s**, so the VU reused a pooled connection as the server closed it. Fixed with jitter.
+   Ruled out the service and the Windows port proxy first: 77,648 `GET /health` through the same
+   proxy at 2,805/s gave zero EOFs. **On EC2 this would have looked like the service faulting.**
+
+**Honesty decisions in the harness:** fixed duration not fixed iterations (wall clock is what
+costs money); `gracefulStop` 900 s so in-flight requests aren't cut off, since those are the
+ones behind the deepest queue and dropping them flatters p95; server-side timings pulled into
+custom Trends because `http_req_duration` can't separate queueing from compute; 503/504 counted,
+never failures — the only threshold is `cosmos_hard_errors == 0`; and `render_results.py` prints
+caveats *above* the tables (504 share, <20 samples, any GPU/dtype/quant or token-budget mismatch
+across rows), because a run full of timeouts still renders plausible-looking numbers.
+
+**No image registry, so the image is built on the instance.** ECR is a fourth AWS service and
+isn't authorised. So the "~4.8 GB compressed pull" from the 2026-08-13 entry is *not* the figure
+that costs paid minutes — nothing pulls that image. What costs minutes is the base pull plus pip
+(~8–12 min, ~$0.06). `-base` still pays off, via a ~400 MB base pull instead of ~2 GB.
+
+**An IAM decision is pending and deliberately not taken.** Mirroring weights to S3 keeps
+`HF_TOKEN` off the rented box, but reading that bucket needs an instance profile — IAM, a third
+service. `docs/EC2.md` §0 presents both routes and blocks on an explicit choice.
+
+**Verified:** dry run at 2 VU/32 tok, then 8 VU/16 tok at `COSMOS_MAX_QUEUE_DEPTH=2` to force
+the overload path → **0 hard errors, k6 exit 0**, 57 × 503 counted, summary written with the
+`/health` load report embedded. `render_results.py` correctly flagged that the two dry-run cells
+used different `max_new_tokens`. `pytest` 35 passed / 1 skipped (baseline), `ruff` clean. Laptop
+numbers (0.6–1.7 tok/s) are published nowhere — the dry run proves the harness, not the hardware.

@@ -3,13 +3,17 @@
 **Status: Phase 1 is COMPLETE and verified end to end on the RTX 3060.**
 The service loads real weights, and the smoke test passes on **both image and video**.
 The image has been shrunk to 13.5 GB and re-verified.
+**The Phase 2 harness and runbooks are also written and dry-run** (2026-08-14) — `loadtest/`,
+`docs/EC2.md`, `docs/TEARDOWN.md`. Nothing is left to author on a rented GPU.
 **Budget spent to date: $0.00 / $10.00**
 
 ---
 
 ## ▶ START HERE (next session)
 
-Phase 1 is done and the image shrink is done. These are the next actions, in order.
+All the code is done. **Everything remaining before Phase 2 is a console action only you can
+take**, and item 1 has a 1–3 day lead time, so file it first. There is also one decision
+(item 4) that blocks §2 of the runbook.
 
 **1. ⚠️ File the AWS quota increase — BLOCKING, and only you can do it**
 *(free, ~5 min to file, 1–3 days to land)*
@@ -69,6 +73,18 @@ outlived its instance, a bucket left holding weights.
 
 Cost of the guard itself: **$0.00.** The first two budgets are free; beyond that AWS charges
 $0.02/day each, so keep the total at two or fewer.
+
+**4. ⚠️ Decide the weights route — blocks `docs/EC2.md` §2**
+
+Mirroring weights to S3 keeps `HF_TOKEN` off the rented box (the Phase 1 benefit), but reading
+that bucket from EC2 needs an **instance profile** — i.e. IAM, a third AWS service, which
+`CLAUDE.md` says to ask about first. The alternative is downloading from HuggingFace on the
+instance with the token in a file there. Free either way. `docs/EC2.md` §0 lays out both and
+**stops** rather than quietly creating an IAM role.
+
+**Phase 2 is now build-free.** `loadtest/load.js`, `loadtest/render_results.py`,
+`docs/EC2.md` and `docs/TEARDOWN.md` all exist and were dry-run against the local NF4 service
+on 2026-08-14, including the overload path. The runbook is meant to be executed top to bottom.
 
 **To reproduce the working local run:**
 ```bash
@@ -277,10 +293,16 @@ thing that needs it. Debugging on a rented GPU is what turns a $1 run into a $5 
       *(undo: `aws ec2 delete-security-group --group-id <id>`)*
 - [ ] Pull weights from S3 into the volume, then `docker compose up`
 - [ ] Confirm the banner reads `dtype float16`, `quantization none`, Tesla T4 detected
-- [ ] `loadtest/load.js` — k6, profile A (256 tok) and B (1024 tok), 1 / 4 / 8 VUs
-- [ ] Run both sweeps on the instance against `localhost:8000`
-- [ ] `loadtest/render_results.py` → markdown tables committed to README + docs
-- [ ] Write `docs/TEARDOWN.md` (terminate, verify EBS deleted, release EIP, empty and
+- [x] `loadtest/load.js` — k6, profile A (256 tok) and B (1024 tok), 1 / 4 / 8 VUs.
+      **Written and dry-run 2026-08-14**, including the 503 overload path.
+- [x] **⚠️ Raise `COSMOS_REQUEST_TIMEOUT_S` to 900 on the instance.** The 300 s default covers
+      queue wait *plus* compute, so profile B at 8 VUs returns 504 at every decode rate
+      plausible for a T4. Baked into `docs/EC2.md` with the reasoning inline.
+- [ ] Run both sweeps on the instance against `localhost:8000` — `docs/EC2.md` §6
+- [x] `loadtest/render_results.py` → markdown tables. Written; emits `docs/BENCHMARK.md`
+- [ ] Run the renderer on the real results and commit `docs/BENCHMARK.md` + README table
+- [x] Write `docs/EC2.md` — the runbook, every command paired with its undo
+- [x] Write `docs/TEARDOWN.md` (terminate, verify EBS deleted, release EIP, empty and
       delete the bucket, delete snapshots/AMIs, confirm $0 in Cost Explorer 24 h later).
       **Keep the $5 budget** — it is the thing that catches a teardown that quietly missed
       something, so deleting it on teardown day would remove the guard exactly when it is
