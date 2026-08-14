@@ -26,6 +26,11 @@ assets/*.mp4
 loadtest/results/
 *.json.gz
 
+# Phase 2 scratch — written by docs/EC2.md so docs/TEARDOWN.md can read back what
+# was created. Account-specific, and never useful to anyone cloning the repo.
+.bucket-name
+.instance-info
+
 # OS / editor
 .DS_Store
 Thumbs.db
