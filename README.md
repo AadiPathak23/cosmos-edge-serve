@@ -9,9 +9,9 @@
 > **~$0.32/hour**; on-demand is **$0.526/hour**. A forgotten instance costs about **$380/month**.
 > An unattached Elastic IP bills hourly even with nothing running.
 >
-> If you have run Phase 2, **`docs/TEARDOWN.md` is not optional** — run it the same day and
-> verify in the AWS console, not from memory. (That file is written in Phase 2; nothing has
-> been deployed yet, so it does not exist and there is nothing to tear down.)
+> If you have run Phase 2, **[`docs/TEARDOWN.md`](docs/TEARDOWN.md) is not optional** — run it
+> the same day and verify in the AWS console, not from memory. (Nothing has been deployed yet,
+> so right now there is nothing to tear down.)
 >
 > This project has a hard **$10 total budget**. Estimated real cost of a full Phase 2
 > benchmark run: **~$1.05**.
@@ -29,12 +29,19 @@ on a T4 GPU.** Everything else here exists to produce that number honestly.
 
 | Phase | What | State |
 |---|---|---|
-| 1 | Local FastAPI + Docker service | **code complete, 32 tests passing — not yet run against real weights** |
-| 2 | EC2 T4 deployment + k6 benchmark | not started (costs money) |
+| 1 | Local FastAPI + Docker service | **done — verified end to end against real weights on an RTX 3060, 35 tests passing** |
+| 2 | EC2 T4 deployment + k6 benchmark | **harness and runbooks written and dry-run; the paid run has not happened** |
 | 3 | Kubernetes (local k3s) | optional, not started |
 
-Benchmark results will appear here once Phase 2 runs. Until then, treat every performance
-claim in this README as a prediction rather than a measurement.
+Phase 1 runs the real model: the smoke test passes on both image and video, with non-zero
+visual token counts on each. Phase 2's load harness ([`loadtest/`](loadtest/)), the runbook
+([`docs/EC2.md`](docs/EC2.md)) and the teardown procedure exist and were exercised against the
+local service — but **no GPU has been rented and no benchmark has been run.**
+
+**There are therefore no measured T4 numbers in this repo yet.** Benchmark tables will appear
+here once Phase 2 runs; until then treat every performance claim in this README as a prediction
+rather than a measurement. The laptop's NF4 throughput (0.6–2.9 tok/s) is **not** a T4 number
+and is deliberately published nowhere.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for the current task breakdown and what to do next.
 
@@ -210,6 +217,25 @@ validation, the 503-before-warm contract, queue overflow, `<think>` parsing, and
 `/metrics` shape — but it deliberately does **not** verify model output. That is what
 `scripts/smoke_test.py` is for, and it needs real weights.
 
+### Load testing
+
+[`loadtest/load.js`](loadtest/load.js) is the k6 harness the benchmark runs, and
+[`loadtest/render_results.py`](loadtest/render_results.py) turns its summaries into markdown.
+Both are meant to run **on the GPU instance against `localhost`**, so no WAN latency lands in
+p95. You can dry-run them locally to check the harness itself — drop `max_new_tokens` to ~32,
+because NF4 on a 6 GB laptop takes minutes per request at the real setting:
+
+```bash
+docker run --rm -v "${PWD}:/work" -w /work \
+  -e BASE_URL=http://host.docker.internal:8000 \
+  -e PROFILE=a -e VUS=2 -e DURATION=60s -e MAX_NEW_TOKENS=32 \
+  -e OUT=loadtest/results/dryrun.json grafana/k6 run loadtest/load.js
+```
+
+The renderer prints its caveats **above** the tables — timeout share, thin sample counts, and
+any mismatch in GPU/dtype/quantization or token budget across rows — because a run full of
+timeouts still produces a table of perfectly plausible-looking numbers.
+
 ---
 
 ## Project docs
@@ -217,7 +243,11 @@ validation, the 503-before-warm contract, queue overflow, `<think>` parsing, and
 - [`docs/CLAUDE.md`](docs/CLAUDE.md) — architecture, every key decision and the reasoning
   behind it, plus an append-only changelog
 - [`docs/PLAN.md`](docs/PLAN.md) — phased task breakdown and current status
-- `docs/TEARDOWN.md` — written in Phase 2; the checklist that stops AWS billing
+- [`docs/EC2.md`](docs/EC2.md) — the Phase 2 runbook. Every command paired with the one that
+  undoes it, and it stops for an explicit cost confirmation before spending anything
+- [`docs/TEARDOWN.md`](docs/TEARDOWN.md) — the checklist that stops AWS billing, with a verify
+  command on every step
+- [`docs/KAGGLE.md`](docs/KAGGLE.md) — how to run the free T4 fp16 check before renting a GPU
 
 ## Related
 

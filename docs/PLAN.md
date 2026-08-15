@@ -366,6 +366,20 @@ thing that needs it. Debugging on a rented GPU is what turns a $1 run into a $5 
    survives a precision change. `scripts/kaggle_t4_check.py` records sample answers precisely
    so this can be compared.
 
+**New, found while building the Phase 2 harness (2026-08-14)**
+
+10. **`COSMOS_REQUEST_TIMEOUT_S=900` and the whole §6 wall-clock table are provisional.** Both
+    are computed from an *assumed* 15 tok/s, because the real T4 decode rate is still open
+    question 5. The formula is in `docs/EC2.md`:
+    `timeout >= VUs x (max_new_tokens / measured_tok_s) x 1.3`. **Recompute both from
+    `kaggle_t4_results.json` before the paid run** — if the T4 turns out slower than 10 tok/s,
+    900 is not enough for profile B at 8 VUs and that cell returns 504s again.
+11. **Should profile B at 8 VUs be run at all?** It is the most expensive cell in the grid, its
+    p95 is almost entirely queue wait by construction, and it is the one at risk of timing out.
+    Keeping it is the current plan because "what does concurrency cost a serial worker" is the
+    honest answer the benchmark exists to give — but if wall clock gets tight on the instance,
+    this is the cell to drop, and the abort rule in `docs/EC2.md` §6 already permits it.
+
 **New, found during the image shrink (2026-08-13)**
 
 9. **How much more of the 8.71 GB is removable?** The venv layer is 7.56 GB and dominates

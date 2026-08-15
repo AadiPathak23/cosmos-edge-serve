@@ -556,3 +556,23 @@ the overload path → **0 hard errors, k6 exit 0**, 57 × 503 counted, summary w
 `/health` load report embedded. `render_results.py` correctly flagged that the two dry-run cells
 used different `max_new_tokens`. `pytest` 35 passed / 1 skipped (baseline), `ruff` clean. Laptop
 numbers (0.6–1.7 tok/s) are published nowhere — the dry run proves the harness, not the hardware.
+
+### 2026-08-15 — README corrected to match reality ($0.00 spent)
+
+Housekeeping before closing the session. The README's status table still said Phase 1 was
+"code complete, 32 tests passing — not yet run against real weights", which had been **false
+since 2026-08-12**: the service has run the real model, both smoke-test legs pass, and the
+suite is 35 tests. On a portfolio repo the README is the part people actually read, so a stale
+claim there is worse than a stale note in a plan file.
+
+Corrected the status table, linked `docs/EC2.md` / `docs/TEARDOWN.md` / `docs/KAGGLE.md` (the
+first two were described as "written in Phase 2" and now exist), and added a load-testing
+section with the local dry-run invocation. Kept the explicit statement that **there are no
+measured T4 numbers in this repo yet** and that the laptop's NF4 throughput is published
+nowhere — the point of the section is to make the absence of results obvious rather than
+leave a reader to assume the tables are coming from somewhere.
+
+Recorded two new open questions in `docs/PLAN.md`: the 900 s timeout and the §6 wall-clock
+table are both derived from an *assumed* 15 tok/s and must be recomputed from the Kaggle
+result before the paid run; and whether profile B at 8 VUs earns its place in the grid at all,
+given it is the most expensive cell and the one most likely to time out.
