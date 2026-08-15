@@ -2,6 +2,10 @@
 #
 # Defaults target the 6 GB RTX 3060 Laptop (NF4). For a T4, set COSMOS_QUANT=none
 # and COSMOS_MAX_VISION_TOKENS=4096 in your .env.
+#
+# If you are running the k6 benchmark, also raise COSMOS_REQUEST_TIMEOUT_S to 900:
+# it covers queue wait as well as compute, and 300 makes profile B at 8 concurrent
+# requests return 504 rather than a latency. See docs/EC2.md.
 
 services:
   cosmos:

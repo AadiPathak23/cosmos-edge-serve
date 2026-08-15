@@ -576,3 +576,16 @@ Recorded two new open questions in `docs/PLAN.md`: the 900 s timeout and the §6
 table are both derived from an *assumed* 15 tok/s and must be recomputed from the Kaggle
 result before the paid run; and whether profile B at 8 VUs earns its place in the grid at all,
 given it is the most expensive cell and the one most likely to time out.
+
+### 2026-08-15 — Propagated the timeout finding to where people actually look ($0.00 spent)
+
+The `COSMOS_REQUEST_TIMEOUT_S` finding was recorded in `docs/EC2.md` and the changelog, but
+neither is what someone reaches for when configuring the service. Added the warning and the
+sizing formula (`VUs x (max_new_tokens / measured_tok_s) x 1.3`) to `.env.example` next to the
+value itself, to the `docker-compose.yml` header note that already covers the other T4
+overrides, and to the README's configuration table. A finding that only exists in a runbook
+gets rediscovered the hard way by anyone who does not read the runbook first.
+
+Verified after the config edits: `docker compose config` valid, `pytest` 35 passed / 1 skipped,
+`ruff` clean, and `k6 inspect loadtest/load.js` exits 0 — the last one because `load.js` had
+been edited (header comments) after its final executed run, so its parse was unproven.

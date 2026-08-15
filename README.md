@@ -199,7 +199,15 @@ documents all of them inline. The ones that matter most:
 | `COSMOS_DEVICE` | `auto` | `cpu` if you have no GPU |
 | `COSMOS_MAX_NEW_TOKENS` | `256` | `1024`+ for full reasoning traces |
 | `COSMOS_MAX_VISION_TOKENS` | `1024` | `4096` on a T4 for finer visual detail |
+| `COSMOS_REQUEST_TIMEOUT_S` | `300` | **`900` before load testing** — see below |
 | `COSMOS_ADAPTER_ENABLED` | `false` | `true` to serve a featherweight-ai LoRA adapter |
+
+`COSMOS_REQUEST_TIMEOUT_S` covers **queue wait as well as compute**. One GPU worker serves
+requests serially, so the last of N concurrent requests waits roughly `(N-1) × per-request`
+before it even starts — under concurrency the ceiling is hit by queueing, not by slow
+generation, and the caller gets a 504. Size it as
+`VUs × (max_new_tokens / measured_tok_s) × 1.3`. The `300` default is fine interactively but
+not for a 1024-token / 8-concurrent sweep on a T4 at any plausible decode rate.
 
 ---
 
