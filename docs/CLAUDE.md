@@ -621,3 +621,19 @@ for NF4 stops being true.
 Verified: `git diff` touches only the banner block and the added note; `grep` confirms
 2,438,696,960 now appears only in the VRAM arithmetic and in the new line that explains it;
 no CRLF introduced. No code, config, or test changed.
+
+### 2026-10-07 — README leads with what the project is ($0.00 spent)
+
+The README opened with the cost warning, so the first thing a reader met was a bill
+rather than the project. Added a four-line intro at the top (what it serves, image and
+video, 4-bit for 6 GB GPUs, Phase 1 verified on real weights with 35 tests, T4 benchmark
+pending) and moved the warning, unchanged, to just below the Status section. No other
+README content changed and no numbers were added; the warning is still ahead of every
+command that costs money.
+
+Also committed the 2026-08-19 banner correction, which had sat uncommitted since then, as
+its own commit. An uncommitted `.env.example` edit that deleted the timeout warning and
+commented out `HF_HOME`/`HF_TOKEN` was reverted at the owner's request.
+
+**No Phase 2 progress since 2026-08-19.** The four console blockers in `docs/PLAN.md`
+(spot quota, Kaggle T4 check, $5 budget, weights-route decision) are still open.
