@@ -6,6 +6,7 @@ The image has been shrunk to 13.5 GB and re-verified.
 **The Phase 2 harness and runbooks are also written and dry-run** (2026-08-14) — `loadtest/`,
 `docs/EC2.md`, `docs/TEARDOWN.md`. Nothing is left to author on a rented GPU.
 **Budget spent to date: $0.00 / $10.00**
+**As of 2026-10-07 the four console steps below are still outstanding; nothing has been spent.**
 
 ---
 
