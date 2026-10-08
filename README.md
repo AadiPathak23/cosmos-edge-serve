@@ -1,20 +1,11 @@
 # cosmos-edge-serve
 
-> ## 💵 COST WARNING — READ BEFORE RUNNING ANYTHING
->
-> **Phase 1 (this repo as it stands) is free.** It runs entirely on your own machine.
-> Nothing here calls AWS, and there are no paid APIs.
->
-> **Phase 2 launches a GPU instance and will bill you.** A `g4dn.xlarge` spot instance is
-> **~$0.32/hour**; on-demand is **$0.526/hour**. A forgotten instance costs about **$380/month**.
-> An unattached Elastic IP bills hourly even with nothing running.
->
-> If you have run Phase 2, **[`docs/TEARDOWN.md`](docs/TEARDOWN.md) is not optional** — run it
-> the same day and verify in the AWS console, not from memory. (Nothing has been deployed yet,
-> so right now there is nothing to tear down.)
->
-> This project has a hard **$10 total budget**. Estimated real cost of a full Phase 2
-> benchmark run: **~$1.05**.
+An inference service for [`nvidia/Cosmos-Reason2-2B`](https://huggingface.co/nvidia/Cosmos-Reason2-2B),
+NVIDIA's reasoning vision-language model: send an image or short video plus a text prompt and
+get the model's answer back. It runs in 4-bit so it fits on 6 GB GPUs. Phase 1 is verified end
+to end on real weights with 35 tests passing; the T4 benchmark is still pending.
+
+---
 
 An inference service for [`nvidia/Cosmos-Reason2-2B`](https://huggingface.co/nvidia/Cosmos-Reason2-2B),
 a 2B-parameter reasoning vision-language model for physical AI. POST an image or a short
@@ -44,6 +35,22 @@ rather than a measurement. The laptop's NF4 throughput (0.6–2.9 tok/s) is **no
 and is deliberately published nowhere.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for the current task breakdown and what to do next.
+
+> ## 💵 COST WARNING — READ BEFORE RUNNING ANYTHING
+>
+> **Phase 1 (this repo as it stands) is free.** It runs entirely on your own machine.
+> Nothing here calls AWS, and there are no paid APIs.
+>
+> **Phase 2 launches a GPU instance and will bill you.** A `g4dn.xlarge` spot instance is
+> **~$0.32/hour**; on-demand is **$0.526/hour**. A forgotten instance costs about **$380/month**.
+> An unattached Elastic IP bills hourly even with nothing running.
+>
+> If you have run Phase 2, **[`docs/TEARDOWN.md`](docs/TEARDOWN.md) is not optional** — run it
+> the same day and verify in the AWS console, not from memory. (Nothing has been deployed yet,
+> so right now there is nothing to tear down.)
+>
+> This project has a hard **$10 total budget**. Estimated real cost of a full Phase 2
+> benchmark run: **~$1.05**.
 
 ---
 
