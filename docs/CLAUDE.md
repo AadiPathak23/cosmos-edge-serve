@@ -589,3 +589,35 @@ gets rediscovered the hard way by anyone who does not read the runbook first.
 Verified after the config edits: `docker compose config` valid, `pytest` 35 passed / 1 skipped,
 `ruff` clean, and `k6 inspect loadtest/load.js` exits 0 — the last one because `load.js` had
 been edited (header comments) after its final executed run, so its parse was unproven.
+
+### 2026-08-19 — README's load-report banner corrected to the measured run ($0.00 spent)
+
+The README's "startup banner" example was a **mock-up written on 2026-08-11**, before the
+model had ever been loaded. The first real run on 2026-08-12 produced different numbers and
+the example was never updated, so the README showed `total params 2,438,696,960` — the exact
+figure this file, `docs/PLAN.md` Q8, `docs/KAGGLE.md` and `docs/EC2.md` §5 all state a live
+model **cannot** report, because `lm_head` is tied to `embed_tokens` and `model.parameters()`
+deduplicates. The repo's most-read file was advertising the number its own load guard exists
+to tolerate the absence of.
+
+Rebuilt the block from the verified 2026-08-12 load report and from `print_banner()` itself
+rather than editing the four wrong values in place — reading the renderer showed the mock was
+also structurally wrong, in ways that would have survived a value-only fix: it used a
+one-space label gap (the code uses three), `fp16 compute` (the code interpolates the dtype, so
+`float16 compute`), `VRAM ... used` (the code says `allocated`), and it omitted the
+`loaded from` and `load time` rows entirely. Corrected values: params 2,127,532,032, weights
+1.43 GiB, VRAM 1.48 GiB allocated / 6.00 GiB total, warmup 18.50 s, load time 84.3 s.
+
+Added a short note under the block explaining the param count, because the README is the one
+place a reader meets that number with no other context and would otherwise read the correct
+figure as a bug.
+
+**Deliberately left alone:** the "Hardware reality check" section's
+`2,438,696,960 × 2 bytes ≈ 4.9 GB`. That is arithmetic about the *on-disk safetensors*, where
+the embedding is stored once, so the card's figure is the right input there. Two different
+numbers answering two different questions — "fix" one to match the other and the VRAM argument
+for NF4 stops being true.
+
+Verified: `git diff` touches only the banner block and the added note; `grep` confirms
+2,438,696,960 now appears only in the VRAM arithmetic and in the new line that explains it;
+no CRLF introduced. No code, config, or test changed.

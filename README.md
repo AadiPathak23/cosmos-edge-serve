@@ -136,22 +136,30 @@ There is **no mock fallback and no silent degradation** — a failed load is a n
 ================================================================================
 COSMOS-EDGE-SERVE — model load report
 --------------------------------------------------------------------------------
-  model id           nvidia/Cosmos-Reason2-2B
-  model class        Qwen3VLForConditionalGeneration
-  device             cuda:0  (NVIDIA GeForce RTX 3060 Laptop GPU)
-  compute capability sm_86   bf16 supported: True
-  dtype              torch.float16
-  quantization       bitsandbytes-nf4 (double quant, fp16 compute)
-  attention          sdpa
-  adapter            NONE  (COSMOS_ADAPTER_ENABLED=false)
-  total params       2,438,696,960
-  trainable params   0  (0.0000%)
-  weights on device  2.02 GiB
-  VRAM               2.61 GiB used / 6.00 GiB total
-  vision tokens      256 .. 1024
-  warmup             OK — 8 tokens in 3.41 s
+  model id             nvidia/Cosmos-Reason2-2B
+  loaded from          nvidia/Cosmos-Reason2-2B
+  model class          Qwen3VLForConditionalGeneration
+  device               cuda:0  (NVIDIA GeForce RTX 3060 Laptop GPU)
+  compute capability   sm_86   bf16 supported: True
+  dtype                torch.float16
+  quantization         bitsandbytes-nf4 (double quant, float16 compute)
+  attention            sdpa
+  adapter              NONE  (COSMOS_ADAPTER_ENABLED=false)
+  total params         2,127,532,032
+  trainable params     0  (0.0000%)
+  weights on device    1.43 GiB
+  VRAM                 1.48 GiB allocated / 6.00 GiB total
+  vision tokens        256 .. 1024
+  load time            84.3 s
+  warmup               OK — 8 tokens in 18.50 s
 ================================================================================
 ```
+
+That `total params` figure is **2,127,532,032**, not the model card's 2,438,696,960. Qwen3-VL-2B ties
+`lm_head` to `embed_tokens`, and `model.parameters()` deduplicates shared tensors, so a correct load
+can never report the card's number — the difference is exactly one embedding table
+(151936 × 2048). This is why the startup guard is a **floor** rather than an equality check; asserting
+the card's figure would abort every healthy load.
 
 ---
 
